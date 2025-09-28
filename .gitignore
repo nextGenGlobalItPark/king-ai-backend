@@ -28,3 +28,8 @@ Homestead.json
 .env.production
 .phpactor.json
 auth.json
+
+
+.idea
+docker/mysql/data/*
+.DS_Store
