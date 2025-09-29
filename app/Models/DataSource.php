@@ -10,4 +10,16 @@ class DataSource extends Model
 {
     use HasFactory, HasApiTokens;
     protected $guarded = [''];
+
+    public function templateCategories()
+    {
+        return $this->belongsToMany(TemplateCategory::class, 'template_category_data_sources', 'datasource_id', 'template_category_id')
+            ->withPivot('created_by', 'source_db_id')
+            ->withTimestamps();
+    }
+
+    public function createdBy()
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
 }
