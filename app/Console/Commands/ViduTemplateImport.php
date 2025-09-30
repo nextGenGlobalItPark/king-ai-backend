@@ -2,11 +2,18 @@
 
 namespace App\Console\Commands;
 
+use App\Models\DataSource;
+use App\Models\Template;
+use App\Models\TemplateCategory;
+use App\Models\TemplateCategoryDataSource;
+use App\Models\TemplateContent;
+use App\Models\ViduTemplate;
 use GuzzleHttp\Client;
-use GuzzleHttp\Exception\RequestException;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Symfony\Component\HttpFoundation\Response;
 
 class ViduTemplateImport extends Command
 {
@@ -36,59 +43,93 @@ class ViduTemplateImport extends Command
             $url = 'https://api.vidu.com/scene/v1/template-scenes?pager.page_token=' . $page_token . '&pager.pagesz=20';
 
             try {
+                $dataSource = DataSource::query()->whereLike('name', 'vidu')->first();
+                $dataSourceId = $dataSource->id;
+
                 $response = $client->get($url);
                 $status = $response->getStatusCode();
                 $body = $response->getBody()->getContents();
 
-                if ($status !== 200) {
+                if ($status !== Response::HTTP_OK) {
                     $this->error('Failed to fetch data from API.');
                     break;
                 }
 
                 $data = json_decode($body, true);
 
-                foreach ($data['template_list'] ?? [] as $template) {
-                    if (ViduTemplate::where('resource_id', $template['id'])->exists()) {
+                foreach ($data['template_list'] ?? [] as $viduTemplate) {
+                    DB::beginTransaction();
+                    if (ViduTemplate::where('resource_id', $viduTemplate['id'])->exists()) {
                         continue;
                     }
-
-                    $category = Category::firstOrCreate(['name' => $template['category_name'], 'source' => 'vidu']);
-
-                    $cover_path = $this->downloadFile($template['cover_url'] ?? null, 'images');
-                    $video_path = $this->downloadFile($template['video_url'] ?? null, 'videos');
-
-                    $viduTemplate = ViduTemplate::create([
-                        'resource_id' => $template['id'],
-                        'resource' => json_encode($template),
-                        'name' => $template['name'],
-                        'resolution' => $template['detail']['resolution'],
-                        'duration' => $template['detail']['duration'],
-                        'aspect_ratio' => $template['detail']['aspect_ratio'],
-                        'credit_cost' => $template['detail']['credit_cost'],
-                        'scene' => $template['detail']['scene'],
-                        'category_id' => $category->id,
-                        'cover_url' => $cover_path ?? '',
-                        'type' => $template['type'],
-                        'video_url' => $video_path ?? '',
+                    $template = Template::create([
+                        'name' => $viduTemplate['name'],
+                        'template_category_id' => $viduTemplate['category_id'],
+                        'credit_cost' => $viduTemplate['detail']['credit_cost'],
+                        'created_by' => 1
                     ]);
+                    $category = TemplateCategory::firstOrCreate(
+                        [
+                            'template_category_name' => $viduTemplate['category_name']
+                        ],
+                        [
+                            'template_category_slug' => Str::slug($viduTemplate['category_name']),
+                            'created_by' => 1,
+                        ]
+                    );
 
-                    $input = $template['input_instruction'] ?? [];
+                    TemplateCategoryDataSource::firstOrCreate(
+                        [
+                            'template_category_id' => $category->id,
+                            'datasource_id' => $dataSourceId
+
+                        ],
+                        [
+                            'source_db_id' => $viduTemplate['category_id'],
+                            'created_by' => 1,
+                        ]
+                    );
+
+                    $cover_path = $this->downloadFile($viduTemplate['cover_url'] ?? null, 'images');
+                    if($cover_path) {
+                        TemplateContent::create(
+                            [
+                                'template_id' => $template->id,
+                                'template_content_type' => 'cover',
+                                'template_content' => $cover_path,
+                                'created_by' => 1
+                            ]
+                        );
+                    }
+
+                    $video_path = $this->downloadFile($viduTemplate['video_url'] ?? null, 'videos');
+                    if($video_path) {
+                        TemplateContent::create(
+                            [
+                                'template_id' => $template->id,
+                                'template_content_type' => 'video',
+                                'template_content' => $video_path,
+                                'created_by' => 1
+                            ]
+                        );
+                    }
+
+                    $input = $viduTemplate['input_instruction'] ?? [];
                     $local_images = [];
                     foreach ($input['image_url'] ?? [] as $img_url) {
+                        $img_url = $this->downloadFile($img_url, 'images');
+                        TemplateContent::create(
+                            [
+                                'template_id' => $template->id,
+                                'template_content_type' => 'image',
+                                'template_content' => $img_url,
+                                'created_by' => 1
+                            ]
+                        );
                         $local_images[] = $this->downloadFile($img_url, 'images');
                     }
 
-                    ViduInputInstruction::create([
-                        'vidu_template_id' => $viduTemplate->id,
-                        'image_count' => $input['image_count'] ?? null,
-                        'image_url' => json_encode($local_images),
-                        'person_count' => $input['person_count'] ?? null,
-                        'attention' => $input['attention'] ?? null,
-                        'prompt_instruction' => $input['prompt_instruction'] ?? null,
-                        'effect_boundary' => $input['effect_boundary'] ?? null,
-                    ]);
-
-                    $api_ex = $template['api_example'] ?? [];
+                    $api_ex = $viduTemplate['api_example'] ?? [];
                     $request_str = $api_ex['request'] ?? '';
                     $new_request = $request_str;
 
@@ -106,14 +147,35 @@ class ViduTemplateImport extends Command
                         }
                     }
 
-                    ViduApiExample::create([
-                        'vidu_template_id' => $viduTemplate->id,
-                        'request' => $new_request,
+
+                    ViduTemplate::create([
+                        'template_id' => $template->id,
+                        'resource_id' => $viduTemplate['id'],
+                        'resource' => json_encode($viduTemplate),
+                        'name' => $viduTemplate['name'],
+                        'resolution' => $viduTemplate['detail']['resolution'],
+                        'duration' => $viduTemplate['detail']['duration'],
+                        'aspect_ratio' => $viduTemplate['detail']['aspect_ratio'],
+                        'credit_cost' => $viduTemplate['detail']['credit_cost'],
+                        'scene' => $viduTemplate['detail']['scene'],
+                        'category_id' => $category->id,
+                        'cover_url' => $cover_path ?? '',
+                        'type' => $viduTemplate['type'],
+                        'video_url' => $video_path ?? '',
+                        'image_count' => $input['image_count'] ?? null,
+                        'image_url' => json_encode($local_images),
+                        'person_count' => $input['person_count'] ?? null,
+                        'attention' => $input['attention'] ?? null,
+                        'prompt_instruction' => $input['prompt_instruction'] ?? null,
+                        'effect_boundary' => $input['effect_boundary'] ?? null,
+                        'request_body' => $new_request
                     ]);
+                    DB::commit();
                 }
 
                 $page_token = $data['next_page_token'] ?? null;
             } catch (\Exception $e) {
+                DB::rollBack();
                 $this->error('Error: ' . $e->getMessage());
                 break;
             }
@@ -141,3 +203,4 @@ class ViduTemplateImport extends Command
         }
     }
 }
+
