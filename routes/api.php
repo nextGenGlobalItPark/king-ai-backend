@@ -32,9 +32,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::prefix('template/vidu')->group(function () {
         Route::get('/', [ViduTemplateController::class, 'index']);
-        Route::post('/', [ViduTemplateController::class, 'store']);
         Route::get('/{templateId}', [ViduTemplateController::class, 'show']);
-        Route::put('/{templateId}', [ViduTemplateController::class, 'update']);
         Route::delete('/{templateId}', [ViduTemplateController::class, 'destroy']);
     });
 
