@@ -11,14 +11,13 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('templates', function (Blueprint $table) {
+        Schema::create('ai_features', function (Blueprint $table) {
             $table->id();
-            $table->string('name');
-            $table->unsignedBigInteger('template_category_id')->nullable();
-            $table->foreign('template_category_id')->references('id')->on('template_categories');
-            $table->integer('credit_cost')->nullable();
+            $table->string('name')->unique();  // e.g., 'text2video', 'img2video'
+            $table->string('description')->nullable();  // e.g., 'Generate video from text prompt'
+            $table->boolean('is_active')->default(true);
             $table->unsignedBigInteger('created_by')->nullable();
-            $table->foreign('created_by')->references('id')->on('users');
+            $table->foreign('created_by')->references('id')->on('users')->onDelete('cascade');
             $table->timestamps();
             $table->softDeletes();
         });
@@ -29,6 +28,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('templates');
+        Schema::dropIfExists('ai_features');
     }
 };

@@ -2,9 +2,8 @@
 
 namespace Database\Seeders;
 
-use App\Models\DataSource;
+use App\Models\AiFeature;
 use Illuminate\Database\Seeder;
-use Illuminate\Support\Facades\DB;
 
 class DatabaseSeeder extends Seeder
 {
@@ -17,6 +16,8 @@ class DatabaseSeeder extends Seeder
         $this->call([
             AdminSeeder::class,
             DataSourceSeeder::class,
+            AiFeaturesSeeder::class,
+            AiFeatureConfigsSeeder::class
         ]);
 
     }

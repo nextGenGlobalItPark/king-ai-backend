@@ -21,18 +21,13 @@ class Template extends Model
         return $this->belongsTo(User::class, 'created_by');
     }
 
-    public function templateApis()
-    {
-        return $this->hasMany(KingAiTemplateApi::class, 'template_id');
-    }
-
-    public function viduTemplate()
-    {
-        return $this->hasOne(ViduTemplate::class, 'template_id');
-    }
-
     public function templateContents()
     {
         return $this->hasMany(TemplateContent::class, 'template_id');
+    }
+
+    public function aiFeature()
+    {
+        return $this->belongsTo(AiFeature::class, 'ai_feature_id');
     }
 }
