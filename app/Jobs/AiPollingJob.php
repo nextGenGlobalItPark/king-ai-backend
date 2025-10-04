@@ -30,7 +30,7 @@ class AiPollingJob implements ShouldQueue
         try {
             $statusData = $service->pollStatus(
                 $this->aiJob->task_id,
-                $this->aiJob->vendor,
+                $this->aiJob->data_source_id,
                 $this->aiJob->feature
             );
 

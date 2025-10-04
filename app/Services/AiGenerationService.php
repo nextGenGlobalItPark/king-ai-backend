@@ -6,6 +6,7 @@ use App\Models\AiFeature;
 use App\Models\DataSource;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Config;
 use InvalidArgumentException;
@@ -39,11 +40,11 @@ class AiGenerationService
 
         // Validate input against the config's vendor-specific standard_schema
         $standardSchema = $config->standard_schema;
-        $validator = Validator::make($input, [
-            ...array_fill_keys($standardSchema['required'] ?? [], 'required|string'),  // Assume string for simplicity; customize as needed
-            ...array_map(fn($field) => [$field => 'sometimes|string'], $standardSchema['optional'] ?? [])
-        ]);
-
+        $rules = [];
+        foreach (array_merge($standardSchema['required'] ?? [], $standardSchema['optional'] ?? []) as $field) {
+            $rules[$field] = in_array($field, $standardSchema['required'] ?? []) ? 'required|string' : 'sometimes|string';
+        }
+        $validator = Validator::make($input, $rules);
         if ($validator->fails()) {
             throw new InvalidArgumentException(
                 'Invalid input for ' . $vendor . ' (' . $featureName . '): ' . json_encode($validator->errors())
@@ -56,7 +57,7 @@ class AiGenerationService
             $this->mapParams($input, $config->param_mapping ?? []),
             $config->extra_params ?? []
         );
-
+        Log::debug($serviceParams);
         // Build request options
         $client = new Client();
         $options = [
@@ -98,7 +99,7 @@ class AiGenerationService
     public function pollStatus(string $taskId, int $vendorId, string $featureName): array
     {
         $feature = AiFeature::where('name', $featureName)->firstOrFail();
-        $config = $feature->configs()->where('data_source_id', $vendorId)->firstOrFail();
+        $config = $feature->configs()->where('data_source_id', $vendorId)->where('is_active', true)->firstOrFail();
 
         // Construct poll endpoint (customize per vendor if needed; here assuming /tasks/{taskId} suffix)
         $pollEndpoint = $this->buildPollEndpoint($config->endpoint, $taskId);

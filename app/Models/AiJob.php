@@ -20,4 +20,14 @@ class AiJob extends Model
     {
         return $this->belongsTo(User::class);
     }
+
+    public function dataSource()  // Added
+    {
+        return $this->belongsTo(DataSource::class);
+    }
+
+    public function aiFeature()  // Added; assumes 'feature' column stores name
+    {
+        return $this->belongsTo(AiFeature::class, 'feature', 'name');
+    }
 }

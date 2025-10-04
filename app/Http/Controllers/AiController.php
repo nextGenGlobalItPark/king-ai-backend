@@ -4,16 +4,22 @@ namespace App\Http\Controllers;
 
 use App\Jobs\AiGenerationJob;
 use App\Models\AiJob;
+use App\Models\DataSource;
 use App\Models\Template;
 use App\Traits\ResponseTrait;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Config;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
 use InvalidArgumentException;
 use Symfony\Component\HttpFoundation\Response;
 
 class AiController extends Controller
 {
     use ResponseTrait;
+
     /**
      * Generate AI content (queues job).
      */
@@ -23,14 +29,18 @@ class AiController extends Controller
             $request->validate(['input' => 'required|array']);  // Basic; detailed validation in service
             $input = $request->input('input', []);
 
-            $job = AiGenerationJob::dispatch(
-                $feature,
-                $input,
-                auth()->id()
-            )->onQueue('ai_generation');
+            $vendor = Config::get('ai.default_vendor', 'vidu');
+            $dataSource = DataSource::query()->whereLike('name', $vendor)->first();
+            $dataSourceId = $dataSource->id;
+
+            $uuid = Str::uuid()->toString();
+            $jobInstance = new AiGenerationJob($feature, $input, auth()->id(), $dataSourceId, $uuid);
+            $jobInstance->uuid = $uuid;  // Set UUID manually for immediate access
+
+            dispatch($jobInstance)->onQueue('ai_generation');
 
             return $this->success(
-                data: ['job_id' => $job->id],
+                data: ['job_id' => $jobInstance->uuid],
                 message: 'Generation queued',
                 status: Response::HTTP_OK
             );
@@ -46,11 +56,12 @@ class AiController extends Controller
      * Generate AI content using a specific template (queues job).
      * Validates input against the template's linked AI feature config schema.
      */
-    public function generateWithTemplate(Request $request, string $templateId): JsonResponse
+    public function generateWithTemplate(Request $request, int $templateId): JsonResponse
     {
+        $request->validate(['input' => 'required|array']);
         $template = Template::with('aiFeature')->findOrFail($templateId);
 
-        // Ensure template is linked to a valid, active AI feature
+        // Ensure the template is linked to a valid, active AI feature
         if (!$template->aiFeature || !$template->aiFeature->is_active) {
             throw new InvalidArgumentException('Invalid or inactive template.');
         }
@@ -58,9 +69,11 @@ class AiController extends Controller
         $featureName = $template->aiFeature->name;
 
         // Determine vendor and fetch config for schema validation
-        $vendor = $request->header('X-AI-Vendor') ?? Config::get('ai.default_vendor', 'vidu');
+        $vendor = Config::get('ai.default_vendor', 'vidu');
+        $dataSourceId = DataSource::query()->whereLike('name', $vendor)->pluck('id');
+
         $config = $template->aiFeature->configs()
-            ->where('vendor_name', $vendor)
+            ->where('data_source_id', $dataSourceId)
             ->where('is_active', true)
             ->orderBy('priority')
             ->first();
@@ -71,7 +84,7 @@ class AiController extends Controller
 
         // Validate input against the config's vendor-specific standard_schema
         $standardSchema = $config->standard_schema;
-        $validator = \Illuminate\Support\Facades\Validator::make($request->input('input', []), [
+        $validator = Validator::make($request->input('input', []), [
             ...array_fill_keys($standardSchema['required'] ?? [], 'required|string'),  // Assume string; customize as needed
             ...array_map(fn($field) => [$field => 'sometimes|string'], $standardSchema['optional'] ?? [])
         ]);
@@ -88,38 +101,36 @@ class AiController extends Controller
         // $input['template_id'] = $templateId;  // Uncomment if service mapping uses it
 
         // Dispatch job using the template's linked feature
-        $job = AiGenerationJob::dispatch(
-            $featureName,
-            $input,
-            auth()->id(),
-            $vendor
-        )->onQueue('ai_generation');
+        $uuid = Str::uuid()->toString();
+        $jobInstance = new AiGenerationJob($featureName, $input, auth()->id(), $vendor, $uuid);
+        $jobInstance->uuid = $uuid;
 
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'job_id' => $job->id,
+        dispatch($jobInstance)->onQueue('ai_generation');
+
+        return $this->success(
+            data: [
+                'job_id' => $jobInstance->uuid,
                 'template_used' => $template->id,
                 'feature_used' => $featureName,
                 'vendor_used' => $vendor,
-            ],
-            'message' => 'Template-based generation queued'
-        ]);
+            ],message: 'Template-based generation queued'
+        );
     }
 
     /**
      * Get job status.
      */
-    public function status(string $jobId): JsonResponse
+    public function status(string $queueJobId): JsonResponse
     {
         try {
-            $job = AiJob::findOrFail($jobId);
+            $job = AiJob::where('queue_job_id', $queueJobId)->firstOrFail();
             return $this->success(
                 data: $job->load('user'),
                 message: 'Status retrieved',
                 status: Response::HTTP_OK
             );
         } catch (\Exception $e) {
+            Log::debug($e);
             return $this->error(
                 errors: $e->getCode(),
                 message: $e->getMessage()

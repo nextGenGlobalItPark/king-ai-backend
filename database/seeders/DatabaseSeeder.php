@@ -16,8 +16,8 @@ class DatabaseSeeder extends Seeder
         $this->call([
             AdminSeeder::class,
             DataSourceSeeder::class,
-            AiFeaturesSeeder::class,
-            AiFeatureConfigsSeeder::class
+//            AiFeaturesSeeder::class,
+//            AiFeatureConfigsSeeder::class
         ]);
 
     }

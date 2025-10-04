@@ -22,4 +22,9 @@ class DataSource extends Model
     {
         return $this->belongsTo(User::class, 'created_by');
     }
+
+    public function scopeWhereLike($query, $field, $value)
+    {
+        return $query->where($field, 'like', "%{$value}%");
+    }
 }

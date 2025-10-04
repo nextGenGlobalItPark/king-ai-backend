@@ -38,5 +38,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('ai-feature-configs', AiFeatureConfigController::class);
 
     Route::post('/generate/{feature}', [AiController::class, 'generate']);
+//    Route::post('/generate/template/{template-id}', [AiController::class, 'generateWithTemplate']);
     Route::get('/status/{jobId}', [AiController::class, 'status']);
 });
