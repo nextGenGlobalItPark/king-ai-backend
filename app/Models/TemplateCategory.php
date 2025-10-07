@@ -18,6 +18,11 @@ class TemplateCategory extends Model
             ->withTimestamps();
     }
 
+    public function templates()
+    {
+        return $this->hasMany(Template::class, 'template_category_id');
+    }
+
     public function createdBy()
     {
         return $this->belongsTo(User::class, 'created_by');

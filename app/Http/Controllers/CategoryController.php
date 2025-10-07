@@ -20,7 +20,12 @@ class CategoryController extends Controller
     public function index()
     {
         try {
-            $categories = TemplateCategory::with('dataSources')->get();
+            $categories = TemplateCategory::with([
+                'dataSources',
+                'templates.createdBy',
+                'templates.aiFeature.configs.dataSource',
+                'templates.templateContents'
+            ])->get();
             return $this->success(
                 data: CategoryResource::collection($categories),
                 message: 'Template categories retrieved successfully'
