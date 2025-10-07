@@ -24,6 +24,11 @@ class AiFeatureConfig extends Model
         return $this->belongsTo(AiFeature::class);
     }
 
+    public function dataSource()
+    {
+        return $this->belongsTo(DataSource::class, 'data_source_id');
+    }
+
     public function createdBy()
     {
         return $this->belongsTo(User::class, 'created_by');
