@@ -5,6 +5,7 @@ use App\Http\Controllers\AiFeatureConfigController;
 use App\Http\Controllers\AiFeatureController;
 use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\TemplateController;
+use App\Http\Controllers\UploadController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\UserController;
 
@@ -40,4 +41,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/generate/{feature}', [AiController::class, 'generate']);
 //    Route::post('/generate/template/{template-id}', [AiController::class, 'generateWithTemplate']);
     Route::get('/status/{jobId}', [AiController::class, 'status']);
+
+    Route::post('/upload', [UploadController::class, 'upload']);
 });
