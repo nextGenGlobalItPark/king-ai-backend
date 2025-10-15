@@ -8,6 +8,7 @@ use App\Jobs\SendPushNotification;
 
 class TemplateEventPushNotification implements ShouldQueue
 {
+    public string $queue = 'notifications';
     /**
      * Create the event listener.
      */
@@ -31,6 +32,6 @@ class TemplateEventPushNotification implements ShouldQueue
         ];
 
         // Queue the send job (with delay if needed)
-        SendPushNotification::dispatch($title, $body, $data)->onQueue('notifications');
+        SendPushNotification::dispatch($title, $body, $data);
     }
 }

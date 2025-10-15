@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Events\TemplateEvent;
 use App\Http\Requests\StoreTemplateRequest;
 use App\Http\Requests\UpdateTemplateRequest;
 use App\Http\Resources\TemplateResource;
@@ -86,6 +87,7 @@ class TemplateController extends Controller
             DB::commit();
             $template->load(['templateCategory', 'aiFeature', 'createdBy', 'templateContents']);
 
+            event(new TemplateEvent($template, 'created'));
             return $this->success(
                 new TemplateResource($template),
                 'Template created successfully with ' . count($uploadedContents) . ' contents.',
@@ -195,6 +197,8 @@ class TemplateController extends Controller
             DB::commit();
             $template->load(['templateCategory', 'aiFeature', 'createdBy', 'templateContents']);
 
+            event(new TemplateEvent($template, 'updated'));
+
             return $this->success(new TemplateResource($template), 'Template updated successfully');
         } catch (\Exception $e) {
             DB::rollBack();
@@ -212,6 +216,7 @@ class TemplateController extends Controller
     {
         try {
             DB::beginTransaction();
+            event(new TemplateEvent($template, 'deleted'));
             // Permanent delete: Hard-delete files and records
             $contents = $template->templateContents;  // Eager load to access
             foreach ($contents as $content) {
