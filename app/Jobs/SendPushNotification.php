@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\Device;
 use App\Services\PushNotificationServiceInterface;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;

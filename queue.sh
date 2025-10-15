@@ -1,0 +1,1 @@
+cd /var/www/kingai && php artisan queue:work --queue=ai_generation,ai_polling,notifications

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Events\CategoryEvent;
 use App\Http\Resources\CategoryResource;
 use App\Models\TemplateCategory;
 use App\Traits\ResponseTrait;
@@ -61,6 +62,8 @@ class CategoryController extends Controller
                 $category->dataSources()->sync($request->data_source_ids);
             }
             DB::commit();
+
+            event(new CategoryEvent($category, 'created'));
 
             return $this->success(
                 data: new CategoryResource($category->load('dataSources')),
@@ -131,6 +134,7 @@ class CategoryController extends Controller
             }
             DB::commit();
 
+            event(new CategoryEvent($category, 'updated'));
             return $this->success(
                 data: new CategoryResource($category->load('dataSources')),
                 message: 'Template category updated successfully'
@@ -157,13 +161,17 @@ class CategoryController extends Controller
             );
         }
         try {
+            DB::beginTransaction();
             $category = TemplateCategory::findOrFail($id);
+            event(new CategoryEvent($category, 'deleted'));
             $category->delete();
+            DB::commit();
             return $this->success(
                 message: 'Template category deleted successfully'
             );
 
         } catch (\Exception $e) {
+            DB::rollBack();
             return $this->error($e->getMessage(), $e->getCode());
         }
     }

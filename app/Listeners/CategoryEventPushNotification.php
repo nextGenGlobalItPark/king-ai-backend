@@ -8,6 +8,7 @@ use App\Jobs\SendPushNotification;
 
 class CategoryEventPushNotification implements ShouldQueue
 {
+    public string $queue = 'notifications';
     /**
      * Create the event listener.
      */
@@ -26,11 +27,10 @@ class CategoryEventPushNotification implements ShouldQueue
         $data = [
             'type' => 'template',
             'action' => $event->action,
-            'template_id' => $event->template->id,
-            'category_id' => $event->template->template_category_id,
+            'category_id' => $event->category->id,
         ];
 
         // Queue the send job (with delay if needed)
-        SendPushNotification::dispatch($title, $body, $data)->onQueue('notifications');
+        SendPushNotification::dispatch($title, $body, $data);
     }
 }

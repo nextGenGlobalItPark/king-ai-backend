@@ -18,9 +18,9 @@ class AiGenerationJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public $tries = 3;  // Retry failed generations up to 3 times
-    public $backoff = [10, 30, 60];  // Exponential backoff
-    public $timeout = 300;  // 5 min timeout
+    public int $tries = 3;  // Retry failed generations up to 3 times
+    public array $backoff = [10, 30, 60];  // Exponential backoff
+    public int $timeout = 300;  // 5 min timeout
 
     public ?int $aiJobId = null;
     public function __construct(
