@@ -8,6 +8,7 @@ use App\Http\Requests\StoreUserRequest;
 use App\Http\Requests\UpdateUserRequest;
 use App\Http\Resources\UserResource;
 use App\Models\User;
+use App\Services\UserService;
 use App\Traits\ResponseTrait;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -19,6 +20,12 @@ use Symfony\Component\HttpFoundation\Response;
 class UserController extends Controller
 {
     use ResponseTrait;
+
+    private UserService $userService;
+    public function __construct(UserService $userService)
+    {
+        $this->userService = $userService;
+    }
 
     public function index(Request $request): JsonResponse
     {
@@ -44,7 +51,7 @@ class UserController extends Controller
     {
         try {
             DB::beginTransaction();
-            $user = $this->createUser($request->validated());
+            $user = $this->userService->createUser($request->validated());
             DB::commit();
             return $this->success(new UserResource($user), 'User created successfully', Response::HTTP_CREATED);
         } catch (\Exception $e) {
@@ -89,58 +96,5 @@ class UserController extends Controller
             DB::rollBack();
             return $this->error($e->getMessage(), $e->getCode());
         }
-    }
-
-    public function register(RegisterRequest $request): JsonResponse
-    {
-        try {
-            DB::beginTransaction();
-            $user = $this->createUser($request->validated());
-            $token = $user->createToken('api-token')->plainTextToken;
-            DB::commit();
-
-            return $this->success(['user' => new UserResource($user), 'token' => $token], 'User registered successfully', Response::HTTP_CREATED);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return $this->error($e->getMessage(), $e->getCode());
-        }
-    }
-
-    public function login(LoginRequest $request): JsonResponse
-    {
-        try {
-            $user = User::where('email', $request->email)->first();
-
-            if (!$user || !Hash::check($request->password, $user->password)) {
-                return $this->error(null, 'Invalid credentials', Response::HTTP_UNAUTHORIZED);
-            }
-
-            $token = $user->createToken('api-token')->plainTextToken;
-
-            return $this->success(['token' => $token], 'Login successful');
-
-        } catch (\Exception $e) {
-            return $this->error($e->getMessage(), $e->getCode());
-        }
-    }
-
-    public function logout(Request $request): JsonResponse
-    {
-        try {
-            $request->user()->currentAccessToken()->delete();
-            return $this->success(null, 'Logged out successfully');
-        } catch (\Exception $e) {
-            return $this->error($e->getMessage(), $e->getCode());
-        }
-    }
-
-    /**
-     * Reusable method to create a user (avoids duplication).
-     */
-    private function createUser(array $data): User
-    {
-        $data['password'] = Hash::make($data['password']);
-        return User::create($data);
     }
 }

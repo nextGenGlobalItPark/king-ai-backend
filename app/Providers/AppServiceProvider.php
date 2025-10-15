@@ -3,6 +3,8 @@
 namespace App\Providers;
 
 use App\Exceptions\Handler;
+use App\Services\FCMPushService;
+use App\Services\PushNotificationServiceInterface;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\ServiceProvider;
@@ -16,6 +18,14 @@ class AppServiceProvider extends ServiceProvider
         //
         $this->app->singleton(ExceptionHandler::class, function (Application $app) {
             return new Handler($app);
+        });
+
+        $this->app->bind(PushNotificationServiceInterface::class, function () {
+            $provider = config('push.provider', 'fcm');
+            return match($provider) {
+                'fcm' => new FCMPushService(),
+                default => throw new \InvalidArgumentException("Invalid push provider: {$provider}"),
+            };
         });
     }
 
