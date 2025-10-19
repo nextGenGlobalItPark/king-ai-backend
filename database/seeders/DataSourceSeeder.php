@@ -29,5 +29,11 @@ class DataSourceSeeder extends Seeder
             'url' => 'https://klingai.com/',
             'created_by' => 1
         ]);
+
+        DataSource::create([
+            'name'  => 'King-ai',
+            'url' => 'https://king-ai.com/',
+            'created_by' => 1
+        ]);
     }
 }
