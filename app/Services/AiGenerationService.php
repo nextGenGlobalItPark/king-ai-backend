@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\AiFeature;
 use App\Models\DataSource;
+use App\Contracts\PollStrategyInterface;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
 use Illuminate\Support\Facades\Log;
@@ -13,13 +14,10 @@ use InvalidArgumentException;
 
 class AiGenerationService
 {
+    public function __construct(private PollStrategyResolver $strategyResolver) {}
+
     /**
      * Generate content using the specified AI feature and input.
-     *
-     * @param string $featureName
-     * @param array $input
-     * @return array
-     * @throws InvalidArgumentException|GuzzleException
      */
     public function generate(string $featureName, array $input): array
     {
@@ -31,6 +29,9 @@ class AiGenerationService
         // Determine vendor and fetch config
         $vendor = Config::get('ai.default_vendor', 'vidu');
         $dataSource = DataSource::query()->whereLike('name', $vendor)->first();
+        if (!$dataSource) {
+            throw new InvalidArgumentException("No data source found for vendor '{$vendor}'.");
+        }
         $dataSourceId = $dataSource->id;
         $config = $feature->configs()
             ->where('data_source_id', $dataSourceId)
@@ -57,17 +58,18 @@ class AiGenerationService
             $this->mapParams($input, $config->param_mapping ?? []),
             $config->extra_params ?? []
         );
-        Log::debug($serviceParams);
+        Log::debug('Service params for generation', ['params' => $serviceParams]);
+
         // Build request options
         $client = new Client();
         $options = [
-            'method' => $config->method,
             'headers' => [
-                $config->auth_header_key => $config->auth_type . ' ' . Config::get($config->auth_value_from_env),
+                $config->auth_header_key => $config->auth_type . ' ' . env($config->auth_value_from_env),
                 'Content-Type' => $config->content_type,
             ],
             'timeout' => 120,  // 2 min timeout for AI calls
         ];
+        $options['method'] = $config->method;
 
         // Handle body format
         if ($config->body_format === 'json') {
@@ -80,6 +82,7 @@ class AiGenerationService
             // urlencoded fallback
             $options['form_params'] = $serviceParams;
         }
+        Log::debug('Request options', ['options' => $options]);
 
         // Send request
         $response = $client->request($config->method, $config->endpoint, $options);
@@ -89,57 +92,44 @@ class AiGenerationService
 
     /**
      * Poll the status of a generation task.
-     *
-     * @param string $taskId
-     * @param integer $vendorId
-     * @param string $featureName
-     * @return array
-     * @throws GuzzleException
      */
-    public function pollStatus(string $taskId, int $vendorId, string $featureName): array
+    public function pollStatus(string $taskId, int $dataSourceId, string $featureName): array
     {
         $feature = AiFeature::where('name', $featureName)->firstOrFail();
-        $config = $feature->configs()->where('data_source_id', $vendorId)->where('is_active', true)->firstOrFail();
+        $config = $feature->configs()->where('data_source_id', $dataSourceId)->where('is_active', true)->firstOrFail();
 
-        // Construct poll endpoint (customize per vendor if needed; here assuming /tasks/{taskId} suffix)
-        $pollEndpoint = $this->buildPollEndpoint($config->endpoint, $taskId);
-
-        $client = new Client();
-        $response = $client->get($pollEndpoint, [
-            'headers' => [
-                $config->auth_header_key => $config->auth_type . ' ' . Config::get($config->auth_value_from_env),
-            ],
-            'timeout' => 30,
-        ]);
-
-        $data = json_decode($response->getBody()->getContents(), true);
-
-        // Normalize response (assume service returns 'status' and 'result' or 'error')
-        $status = $data['status'] ?? 'unknown';
-        if ($status === 'completed') {
-            return [
-                'status' => 'completed',
-                'result' => $data['result'] ?? $data['data'] ?? []  // e.g., {'video_url': '...'}
-            ];
-        } elseif ($status === 'failed' || $status === 'error') {
-            return [
-                'status' => 'failed',
-                'error' => $data['error'] ?? 'Unknown error'
-            ];
+        $generateEndpoint = $config->endpoint;
+        if (empty($generateEndpoint)) {
+            throw new InvalidArgumentException('Config endpoint is missing; cannot build poll URL.');
         }
 
-        return [
-            'status' => 'processing',
-            'progress' => $data['progress'] ?? null
-        ];
+        $strategy = $this->strategyResolver->resolve($dataSourceId);
+        $pollEndpoint = $strategy->buildEndpoint($generateEndpoint, $taskId);
+
+        $vendorName = DataSource::find($dataSourceId)->name ?? 'unknown';
+        Log::debug('Polling task', ['task_id' => $taskId, 'endpoint' => $pollEndpoint, 'vendor' => $vendorName]);
+
+        $client = new Client();
+        try {
+            $response = $client->get($pollEndpoint, [
+                'headers' => [
+                    $config->auth_header_key => $config->auth_type . ' ' . env($config->auth_value_from_env),
+                ],
+                'timeout' => 30,
+            ]);
+        } catch (GuzzleException $e) {
+            Log::error('Polling request failed', ['error' => $e->getMessage(), 'endpoint' => $pollEndpoint]);
+            throw $e;
+        }
+
+        $data = json_decode($response->getBody()->getContents(), true);
+        Log::debug('Raw poll response', ['data' => $data]);  // For debugging
+
+        return $strategy->parseResponse($data ?? []);
     }
 
     /**
      * Map standard input fields to vendor-specific fields.
-     *
-     * @param array $input
-     * @param array $mapping
-     * @return array
      */
     private function mapParams(array $input, array $mapping): array
     {
@@ -152,25 +142,5 @@ class AiGenerationService
             ->toArray();
     }
 
-    /**
-     * Build poll endpoint based on vendor/config.
-     *
-     * @param string $generateEndpoint
-     * @param string $taskId
-     * @return string
-     */
-    private function buildPollEndpoint(string $generateEndpoint, string $taskId): string
-    {
-        // Generic: replace last segment with /tasks/{taskId}
-        $parts = explode('/', rtrim($generateEndpoint, '/'));
-        array_pop($parts);  // Remove last (e.g., 'text2video')
-        $parts[] = 'tasks';
-        $parts[] = $taskId;
-
-        return implode('/', $parts);
-
-        // Vendor-specific overrides if needed:
-        // if (str_contains($generateEndpoint, 'vidu')) { ... }
-        // if (str_contains($generateEndpoint, 'kling')) { ... }
-    }
+    // Removed: Unused buildPollEndpoint() method
 }

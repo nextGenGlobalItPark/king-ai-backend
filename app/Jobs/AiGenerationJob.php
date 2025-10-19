@@ -12,7 +12,6 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Str;
 
 class AiGenerationJob implements ShouldQueue
 {
@@ -27,22 +26,25 @@ class AiGenerationJob implements ShouldQueue
         public string $feature,
         public array $input,
         public ?int $userId = null,
-        public ?string $vendor = null,
+        public ?string $vendor = null,  // TODO: Change to ?int $dataSourceId for consistency
         public string $jobId
     ) {}
 
     public function handle(AiGenerationService $service): void
     {
+        $aiJob = null;
         try {
-            Log::debug("AI GenerationJob started");
+            Log::debug("AI GenerationJob started", ['job_id' => $this->jobId]);
             $vendor = Config::get('ai.default_vendor', 'vidu');
             $dataSource = DataSource::query()->whereLike('name', $vendor)->first();
+            if (!$dataSource) {
+                throw new \InvalidArgumentException("No data source found for vendor '{$vendor}'.");
+            }
             $dataSourceId = $dataSource->id;
+
             // Create or update job record
-            Log::debug($dataSourceId);
-            Log::debug("Job ID: ".$this->jobId);
             $aiJob = AiJob::updateOrCreate(
-                ['queue_job_id' => $this->jobId],  // Use job UUID if available
+                ['queue_job_id' => $this->jobId],
                 [
                     'task_id' => null,
                     'feature' => $this->feature,
@@ -52,22 +54,23 @@ class AiGenerationJob implements ShouldQueue
                     'status' => 'processing'
                 ]
             );
-            Log::debug($aiJob);
             $this->aiJobId = $aiJob->id;
-            Log::debug($aiJob);
+            Log::debug('AiJob created/updated', ['ai_job_id' => $aiJob->id]);
+
             $response = $service->generate($this->feature, $this->input);
-            $taskId = $response['task_id'] ?? $response['id'] ?? uniqid('task_');  // Assume task_id in response
+            $taskId = $response['task_id'] ?? $response['id'] ?? uniqid('task_');
 
             $aiJob->update(['task_id' => $taskId]);
-            Log::debug($aiJob);
-            // Dispatch polling job
+            Log::debug('Task ID set', ['task_id' => $taskId]);
+
+            // Dispatch polling job (no endpoint needed)
             AiPollingJob::dispatch($aiJob)
-                ->delay(now()->addSeconds(10))  // Initial poll delay
+                ->delay(now()->addSeconds(10))
                 ->onQueue('ai_polling');
 
             Log::info('AI Generation queued for polling', ['job_id' => $aiJob->id, 'task_id' => $taskId]);
         } catch (\Exception $e) {
-            if (isset($aiJob)) {  // Guard against unset $aiJob
+            if ($aiJob) {
                 $aiJob->update([
                     'status' => 'failed',
                     'result' => ['error' => $e->getMessage()]
@@ -76,12 +79,14 @@ class AiGenerationJob implements ShouldQueue
 
             Log::error('AI Generation failed', [
                 'job_id' => $this->aiJobId ?? null,
-                'queue_job_id' => $queueJobId ?? null,
-                'error' => $e->getMessage()
+                'queue_job_id' => $this->jobId,  // Fixed: Use $this->jobId
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()  // Optional: For deeper debug
             ]);
 
-            // Optionally notify user via event or email
-            // event(new AiJobFailed($aiJob));
+            // Optionally notify user
+            // event(new AiJobFailed($aiJob ?? null));
+            throw $e;  // Re-throw for queue retry
         }
     }
 
