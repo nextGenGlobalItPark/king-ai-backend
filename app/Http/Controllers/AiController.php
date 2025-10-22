@@ -29,8 +29,9 @@ class AiController extends Controller
             $request->validate(['input' => 'required|array']);  // Basic; detailed validation in service
             $input = $request->input('input', []);
 
-            $vendor = Config::get('ai.default_vendor', 'vidu');
-            $dataSource = DataSource::query()->whereLike('name', $vendor)->first();
+            // Dynamic vendor support
+            $vendor = $request->query('vendor', Config::get('ai.default_vendor', 'vidu'));
+            $dataSource = DataSource::query()->whereLike('name', $vendor)->firstOrFail();
             $dataSourceId = $dataSource->id;
 
             $uuid = Str::uuid()->toString();
@@ -40,7 +41,7 @@ class AiController extends Controller
             dispatch($jobInstance)->onQueue('ai_generation');
 
             return $this->success(
-                data: ['job_id' => $jobInstance->uuid],
+                data: ['job_id' => $jobInstance->uuid, 'vendor' => $vendor],
                 message: 'Generation queued',
                 status: Response::HTTP_OK
             );
@@ -50,71 +51,6 @@ class AiController extends Controller
                 message: $e->getMessage()
             );
         }
-    }
-
-    /**
-     * Generate AI content using a specific template (queues job).
-     * Validates input against the template's linked AI feature config schema.
-     */
-    public function generateWithTemplate(Request $request, int $templateId): JsonResponse
-    {
-        $request->validate(['input' => 'required|array']);
-        $template = Template::with('aiFeature')->findOrFail($templateId);
-
-        // Ensure the template is linked to a valid, active AI feature
-        if (!$template->aiFeature || !$template->aiFeature->is_active) {
-            throw new InvalidArgumentException('Invalid or inactive template.');
-        }
-
-        $featureName = $template->aiFeature->name;
-
-        // Determine vendor and fetch config for schema validation
-        $vendor = Config::get('ai.default_vendor', 'vidu');
-        $dataSourceId = DataSource::query()->whereLike('name', $vendor)->pluck('id');
-
-        $config = $template->aiFeature->configs()
-            ->where('data_source_id', $dataSourceId)
-            ->where('is_active', true)
-            ->orderBy('priority')
-            ->first();
-
-        if (!$config) {
-            throw new InvalidArgumentException("No active config found for vendor '{$vendor}' on feature '{$featureName}'.");
-        }
-
-        // Validate input against the config's vendor-specific standard_schema
-        $standardSchema = $config->standard_schema;
-        $validator = Validator::make($request->input('input', []), [
-            ...array_fill_keys($standardSchema['required'] ?? [], 'required|string'),  // Assume string; customize as needed
-            ...array_map(fn($field) => [$field => 'sometimes|string'], $standardSchema['optional'] ?? [])
-        ]);
-
-        if ($validator->fails()) {
-            throw new InvalidArgumentException(
-                "Invalid input for '{$vendor}' ({$featureName}): " . json_encode($validator->errors())
-            );
-        }
-
-        $input = $request->input('input', []);
-
-        // Optionally enrich input with template metadata if needed (e.g., for prompt appending)
-        // $input['template_id'] = $templateId;  // Uncomment if service mapping uses it
-
-        // Dispatch job using the template's linked feature
-        $uuid = Str::uuid()->toString();
-        $jobInstance = new AiGenerationJob($featureName, $input, auth()->id(), $vendor, $uuid);
-        $jobInstance->uuid = $uuid;
-
-        dispatch($jobInstance)->onQueue('ai_generation');
-
-        return $this->success(
-            data: [
-                'job_id' => $jobInstance->uuid,
-                'template_used' => $template->id,
-                'feature_used' => $featureName,
-                'vendor_used' => $vendor,
-            ],message: 'Template-based generation queued'
-        );
     }
 
     /**

@@ -17,16 +17,17 @@ class AiGenerationJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public int $tries = 3;  // Retry failed generations up to 3 times
-    public array $backoff = [10, 30, 60];  // Exponential backoff
-    public int $timeout = 300;  // 5 min timeout
+    public int $tries = 3;
+    public array $backoff = [10, 30, 60];
+    public int $timeout = 300;
 
     public ?int $aiJobId = null;
+
     public function __construct(
         public string $feature,
         public array $input,
         public ?int $userId = null,
-        public ?string $vendor = null,  // TODO: Change to ?int $dataSourceId for consistency
+        public ?int $dataSourceId = null,  // Prioritize this over vendor string
         public string $jobId
     ) {}
 
@@ -35,10 +36,16 @@ class AiGenerationJob implements ShouldQueue
         $aiJob = null;
         try {
             Log::debug("AI GenerationJob started", ['job_id' => $this->jobId]);
-            $vendor = Config::get('ai.default_vendor', 'vidu');
-            $dataSource = DataSource::query()->whereLike('name', $vendor)->first();
+
+            // Resolve dataSourceId
+            if (!$this->dataSourceId) {
+                $vendor = Config::get('ai.default_vendor', 'vidu');
+                $dataSource = DataSource::query()->whereLike('name', $vendor)->first();
+            } else {
+                $dataSource = DataSource::find($this->dataSourceId);
+            }
             if (!$dataSource) {
-                throw new \InvalidArgumentException("No data source found for vendor '{$vendor}'.");
+                throw new \InvalidArgumentException("No data source found for ID '{$this->dataSourceId}' or default '{$vendor}'");
             }
             $dataSourceId = $dataSource->id;
 
@@ -51,7 +58,8 @@ class AiGenerationJob implements ShouldQueue
                     'data_source_id' => $dataSourceId,
                     'input' => $this->input,
                     'user_id' => $this->userId,
-                    'status' => 'processing'
+                    'status' => 'processing',
+                    'progress' => 0.0,
                 ]
             );
             $this->aiJobId = $aiJob->id;
@@ -63,7 +71,7 @@ class AiGenerationJob implements ShouldQueue
             $aiJob->update(['task_id' => $taskId]);
             Log::debug('Task ID set', ['task_id' => $taskId]);
 
-            // Dispatch polling job (no endpoint needed)
+            // Dispatch polling job
             AiPollingJob::dispatch($aiJob)
                 ->delay(now()->addSeconds(10))
                 ->onQueue('ai_polling');
@@ -73,20 +81,19 @@ class AiGenerationJob implements ShouldQueue
             if ($aiJob) {
                 $aiJob->update([
                     'status' => 'failed',
-                    'result' => ['error' => $e->getMessage()]
+                    'result' => ['error' => $e->getMessage()],
+                    'progress' => 0.0,
                 ]);
             }
 
             Log::error('AI Generation failed', [
                 'job_id' => $this->aiJobId ?? null,
-                'queue_job_id' => $this->jobId,  // Fixed: Use $this->jobId
+                'queue_job_id' => $this->jobId,
                 'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()  // Optional: For deeper debug
+                'trace' => $e->getTraceAsString(),
             ]);
 
-            // Optionally notify user
-            // event(new AiJobFailed($aiJob ?? null));
-            throw $e;  // Re-throw for queue retry
+            throw $e;  // Re-throw for retry
         }
     }
 
@@ -97,14 +104,15 @@ class AiGenerationJob implements ShouldQueue
             if ($aiJob) {
                 $aiJob->update([
                     'status' => 'failed',
-                    'result' => ['error' => $exception->getMessage()]
+                    'result' => ['error' => $exception->getMessage()],
+                    'progress' => 0.0,
                 ]);
             }
         }
 
         Log::error('AI Generation job failed after retries', [
             'queue_job_id' => $this->job->getJobId(),
-            'error' => $exception->getMessage()
+            'error' => $exception->getMessage(),
         ]);
     }
 }
