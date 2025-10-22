@@ -21,7 +21,7 @@ class AiFeatureConfig extends Model
 
     public function feature()
     {
-        return $this->belongsTo(AiFeature::class);
+        return $this->belongsTo(AiFeature::class, 'ai_feature_id');
     }
 
     public function dataSource()
