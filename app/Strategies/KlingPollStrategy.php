@@ -3,33 +3,37 @@
 namespace App\Strategies;
 
 use App\Contracts\PollStrategyInterface;
+use Illuminate\Support\Facades\Log;
 
 class KlingPollStrategy implements PollStrategyInterface
 {
     public function buildEndpoint(string $generateEndpoint, string $taskId): string
     {
-        // Kling-specific: Assume '/api/v1/tasks/{taskId}' (independent of generate endpoint)
-        return str_replace('/generate', '/tasks/' . $taskId, $generateEndpoint);  // Or hardcode: 'https://api.kling.ai/v1/tasks/' . $taskId
+        // Hardcoded Kling base (independent of generate; from API docs)
+        return 'https://api.kling.ai/v1/tasks/' . $taskId;
     }
 
     public function parseResponse(array $response): array
     {
         $status = $response['status'] ?? 'unknown';
-        if ($status === 'done') {
+
+        if ($status === 'succeeded' || $status === 'done') {
             return [
                 'status' => 'completed',
-                'result' => $response['output'] ?? [],
+                'result' => ['video_url' => $response['video_url'] ?? $response['output'] ?? []],
+                'progress' => 100.0,
             ];
-        } elseif ($status === 'error') {
+        } elseif ($status === 'failed' || $status === 'error') {
             return [
                 'status' => 'failed',
-                'error' => $response['error_message'] ?? 'Unknown error',
+                'error' => $response['error_message'] ?? $response['error'] ?? 'Unknown error',
+                'progress' => 0.0,
             ];
         }
 
         return [
             'status' => 'processing',
-            'progress' => $response['progress'] ?? null,
+            'progress' => ($response['progress'] ?? 0) * 100,  // Assume 0-1 → 0-100
         ];
     }
 }
