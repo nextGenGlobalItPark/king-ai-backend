@@ -11,53 +11,59 @@ class ViduPollStrategy implements PollStrategyInterface
     {
         // Vidu-specific: From '/ent/v2/text2video' → '/ent/v2/tasks/{taskId}/creations'
         $parts = explode('/', rtrim($generateEndpoint, '/'));
-        array_pop($parts);  // Remove 'text2video'
+        array_pop($parts);  // Remove last (e.g., 'template')
         $parts[] = 'tasks';
         $parts[] = $taskId;
-        $parts[] = 'creations';  // Vidu requires /creations for details
+        $parts[] = 'creations';  // For result details
 
         $endpoint = implode('/', $parts);
-        Log::debug('Built Vidu poll endpoint', ['endpoint' => $endpoint]);  // Optional: For verification
+        Log::debug('Built Vidu poll endpoint', ['endpoint' => $endpoint]);
         return $endpoint;
     }
 
     public function parseResponse(array $response): array
     {
-        // Vidu wraps in 'data'; fallback to direct keys
+        // Vidu wraps in 'data'
         $data = $response['data'] ?? $response;
-        $state = $data['state'] ?? 'unknown';
-        Log::debug('Vidu parsed state', ['raw_state' => $state]);  // For debugging
+        $state = $data['state'] ?? $data['status'] ?? 'unknown';  // Flexible
+        Log::debug('Vidu parsed state', ['raw_state' => $state]);
 
-        if ($state === 'success' || $state === 'succeeded') {
+        if ($state === 'success' || $state === 'succeeded' || $state === 'completed') {
             $creations = $data['creations'] ?? [];
-            $firstCreation = $creations[0] ?? null ?? [];
-            if ($firstCreation) {
+            $firstCreation = $creations[0] ?? [];
+            $videoUrl = $firstCreation['videos'][0]['url'] ?? $data['video_url'] ?? null;  // Common paths
+
+            if (empty($creations)) {
+                Log::warning('Vidu success but empty creations', ['task_id' => $data['task_id'] ?? 'unknown']);
                 return [
-                    'status' => 'complete',
-                    'result' => $data
+                    'status' => 'completed',
+                    'result' => ['message' => 'Task succeeded but no video found'],
+                    'progress' => 100.0,
                 ];
             }
-            // Fallback if no creations
+
             return [
-                'status' => 'complete',
-                'result' => ['message' => 'Task succeeded but no creations found'],
+                'status' => 'completed',
+                'result' => ['video_url' => $videoUrl, 'creations' => $creations],
+                'progress' => 100.0,
             ];
         } elseif ($state === 'failed' || $state === 'error') {
             return [
                 'status' => 'failed',
                 'error' => $data['err_msg'] ?? $data['error'] ?? $data['message'] ?? 'Unknown Vidu error',
+                'progress' => 0.0,
             ];
         } elseif (in_array($state, ['pending', 'processing', 'in_progress'])) {
             return [
                 'status' => 'processing',
-                'result' => null,
+                'progress' => ($data['progress'] ?? 0) * 100 ?? null,
             ];
         }
 
-        // Unknown: Treat as processing for safety
+        // Unknown: Treat as processing
         return [
             'status' => 'processing',
-            'result' => null,
+            'progress' => null,
         ];
     }
 }

@@ -17,7 +17,7 @@ class PollStrategyResolver
         return match (strtolower($vendorName)) {
             'vidu' => new ViduPollStrategy(),
             'kling' => new KlingPollStrategy(),
-            default => throw new InvalidArgumentException("No poll strategy for vendor: {$vendorName}"),
+            default => throw new InvalidArgumentException("No poll strategy for vendor: {$vendorName}. Add a strategy or use generic."),
         };
     }
 }

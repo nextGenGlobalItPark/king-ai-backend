@@ -17,6 +17,9 @@ class AiFeatureConfig extends Model
         'default_params' => 'array',
         'extra_params' => 'array',
         'is_active' => 'boolean',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
+        'deleted_at' => 'datetime',
     ];
 
     public function feature()

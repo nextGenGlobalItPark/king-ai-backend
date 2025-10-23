@@ -26,7 +26,7 @@ class StoreAiFeatureConfigRequest extends FormRequest
             'data_source_id' => 'required|integer|exists:data_sources,id',
             'endpoint' => 'required|url|max:255',
             'method' => 'required|in:GET,POST,PUT,PATCH,DELETE',
-            'auth_type' => 'nullable|string|in:token,bearer',
+            'auth_type' => 'nullable|string|in:Token,bearer',
             'auth_header_key' => 'nullable|string|max:50',
             'auth_value_from_env' => 'required|string|max:50',
             'content_type' => 'nullable|string|max:50',
