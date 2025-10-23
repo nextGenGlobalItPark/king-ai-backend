@@ -11,6 +11,10 @@ class TemplateCategory extends Model
     use HasFactory, SoftDeletes;
     protected $guarded = [''];
 
+    protected $casts = [
+        'is_active' => 'boolean',
+    ];
+
     public function dataSources()
     {
         return $this->belongsToMany(DataSource::class, 'template_category_data_sources', 'template_category_id', 'datasource_id')

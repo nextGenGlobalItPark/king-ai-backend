@@ -15,6 +15,11 @@ return new class extends Migration
             $table->id();
             $table->string('template_category_name');
             $table->string('template_category_slug')->nullable();
+            $table->unsignedBigInteger('created_by')->nullable();
+            $table->foreign('created_by')->references('id')->on('users')->onDelete('cascade');
+            $table->boolean('is_active')->default(true);
+            $table->enum('state', ['test', 'live'])->default('test')->comment("value is of either test or live");
+            $table->integer('sequence')->default(1);
             $table->timestamps();
             $table->softDeletes();
         });
