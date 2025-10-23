@@ -70,6 +70,22 @@ class TemplateResource extends Resource
                             ->numeric()
                             ->minValue(0)
                             ->nullable(),
+                        Toggle::make('is_active')
+                            ->label('Is Active')
+                            ->default(true),
+                        Select::make('state')
+                            ->label('State')
+                            ->options([
+                                'test' => 'Test',
+                                'live' => 'Live',
+                            ])
+                            ->default('test')
+                            ->required(),
+                        TextInput::make('sequence')
+                            ->label('Sequence')
+                            ->numeric()
+                            ->default(0)
+                            ->minValue(0),
                     ])
                     ->columns(2),
                 Forms\Components\Section::make('Template Contents')
@@ -142,6 +158,25 @@ class TemplateResource extends Resource
                     ->sortable(),
                 TextColumn::make('credit_cost')
                     ->label('Credit Cost')
+                    ->numeric()
+                    ->sortable(),
+                IconColumn::make('is_active')
+                    ->label('Active')
+                    ->boolean()
+                    ->trueIcon('heroicon-o-check-circle')
+                    ->falseIcon('heroicon-o-x-circle')
+                    ->sortable(),
+                TextColumn::make('state')
+                    ->label('State')
+                    ->badge()
+                    ->color(fn (string $state): string => match ($state) {
+                        'test' => 'warning',
+                        'live' => 'success',
+                        default => 'gray',
+                    })
+                    ->sortable(),
+                TextColumn::make('sequence')
+                    ->label('Sequence')
                     ->numeric()
                     ->sortable(),
                 TextColumn::make('template_contents_count')
