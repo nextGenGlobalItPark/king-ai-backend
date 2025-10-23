@@ -143,6 +143,7 @@ class TemplateResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->reorderable('sequence')  // Enables drag-and-drop reordering using the 'sequence' column
             ->columns([
                 TextColumn::make('name')
                     ->label('Name')
@@ -242,6 +243,7 @@ class TemplateResource extends Resource
             ->with(['templateCategory', 'aiFeature', 'createdBy', 'templateContents'])
             ->withoutGlobalScopes([
                 SoftDeletingScope::class,
-            ]);
+            ])
+            ->orderBy('sequence', 'asc');  // Ensures rows are displayed in sequence order
     }
 }

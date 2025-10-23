@@ -7,7 +7,7 @@ return [
     'projects' => [
         'your-project-id' => [ // Replace with your project ID
             'credentials' => [
-                'file' => base_path('firebase-service-account.json'), // Path to your JSON key file
+                'file' => storage_path('app/vidio-king-ai-firebase.json'), // Path to your JSON key file
                 // OR inline: 'json' => json_decode(file_get_contents(base_path('firebase-service-account.json')), true),
             ],
             'database' => [
