@@ -21,25 +21,30 @@ class AiFeaturesSeeder extends Seeder
                 'created_by' => 1,
             ],
             [
-                'name' => 'reference2video',
-                'description' => 'Generate video from reference images',
+                'name' => 'kissing_everywhere_8s',
+                'description' => 'kissing_everywhere_8s',
                 'created_by' => 1,
             ],
             [
-                'name' => 'template',
-                'description' => 'Generate video using template',
+                'name' => 'fridge_magnet',
+                'description' => 'fridge_magnet',
                 'created_by' => 1,
             ],
             [
-                'name' => 'reference2image',
-                'description' => 'Generate image from reference',
+                'name' => 'zoom_in',
+                'description' => 'zoom_in',
                 'created_by' => 1,
             ],
             [
-                'name' => 'text2audio',
-                'description' => 'Generate audio from text',
+                'name' => 'auto_spin',
+                'description' => 'auto_spin',
                 'created_by' => 1,
             ],
+            [
+                'name' => 'live_photo',
+                'description' => 'live_photo',
+                'created_by' => 1,
+            ]
         ];
 
         foreach ($features as $feature) {

@@ -33,3 +33,4 @@ auth.json
 .idea
 docker/mysql/data/*
 .DS_Store
+storage/app/vidio-king-ai-firebase.json

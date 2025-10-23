@@ -11,6 +11,10 @@ class Template extends Model
     use HasFactory, SoftDeletes;
     protected $guarded = [''];
 
+    protected $casts = [
+        'is_active' => 'boolean',
+    ];
+
     public function templateCategory()
     {
         return $this->belongsTo(TemplateCategory::class, 'template_category_id');

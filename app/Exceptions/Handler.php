@@ -39,7 +39,6 @@ class Handler extends ExceptionHandler
 
     public function render($request, Throwable $e)
     {
-        Log::debug("asdfasdfasdfasdfasdf");
         if ($request->expectsJson()) {
             return $this->handleApiException($request, $e);
         }

@@ -4,17 +4,13 @@ namespace App\Services;
 
 use App\Models\AiFeature;
 use App\Models\DataSource;
-use App\Contracts\PollStrategyInterface;
-use App\Services\PollStrategyResolver;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ClientException;
-use GuzzleHttp\Exception\GuzzleException;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Config;
 use InvalidArgumentException;
-use Illuminate\Support\Str;  // For data_get if not using Laravel helper
 
 class AiGenerationService
 {

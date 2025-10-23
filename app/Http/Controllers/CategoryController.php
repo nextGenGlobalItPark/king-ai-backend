@@ -8,6 +8,7 @@ use App\Models\TemplateCategory;
 use App\Traits\ResponseTrait;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\Response;
@@ -36,6 +37,7 @@ class CategoryController extends Controller
         }
 
     }
+
 
     /**
      * Store a newly created template category in storage.
