@@ -15,7 +15,6 @@ class CategoryResource extends JsonResource
     {
         $templateContents = collect($this->templates ?? [])->map(function ($template) {
             $contents = collect($template->templateContents ?? [])->values();
-            Log::info('Template contents for template ID ' . $template->id, ['count' => $contents->count()]);
 
             return [
                 'id' => $template->id,

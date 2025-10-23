@@ -5,10 +5,14 @@ namespace App\Filament\Resources;
 use App\Filament\Resources\TemplateCategoryResource\Pages;
 use App\Models\TemplateCategory;
 use Filament\Forms;
+use Filament\Forms\Components\Select;
+use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Toggle;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Filament\Tables\Columns\IconColumn;  // Added this import to fix the error
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
 
@@ -44,6 +48,22 @@ class TemplateCategoryResource extends Resource
                                 modifyRuleUsing: fn ($rule) => $rule->whereNull('deleted_at')
                             )
                             ->maxLength(255),
+                        Toggle::make('is_active')
+                            ->label('Is Active')
+                            ->default(true),
+                        Select::make('state')
+                            ->label('State')
+                            ->options([
+                                'test' => 'Test',
+                                'live' => 'Live',
+                            ])
+                            ->default('test')
+                            ->required(),
+                        TextInput::make('sequence')
+                            ->label('Sequence')
+                            ->numeric()
+                            ->default(1)
+                            ->minValue(0),
                     ])
                     ->columns(2),
                 Forms\Components\Section::make('Relations')
@@ -69,6 +89,7 @@ class TemplateCategoryResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->reorderable('sequence')  // Enables drag-and-drop reordering using the 'sequence' column
             ->columns([
                 Tables\Columns\TextColumn::make('template_category_name')
                     ->label('Name')
@@ -78,13 +99,30 @@ class TemplateCategoryResource extends Resource
                     ->label('Slug')
                     ->searchable()
                     ->sortable(),
+                IconColumn::make('is_active')  // Now resolves correctly with the use statement
+                ->label('Active')
+                    ->boolean()
+                    ->trueIcon('heroicon-o-check-circle')
+                    ->falseIcon('heroicon-o-x-circle')
+                    ->sortable(),
+                Tables\Columns\TextColumn::make('state')
+                    ->label('State')
+                    ->badge()
+                    ->color(fn (string $state): string => match ($state) {
+                        'test' => 'warning',
+                        'live' => 'success',
+                        default => 'gray',
+                    })
+                    ->sortable(),
+                Tables\Columns\TextColumn::make('sequence')
+                    ->label('Sequence')
+                    ->numeric()
+                    ->sortable(),
                 Tables\Columns\TextColumn::make('templates_count')
                     ->label('Templates Count')
-                    ->counts('templates')
                     ->sortable(),
-                Tables\Columns\TextColumn::make('dataSourcesCount')
+                Tables\Columns\TextColumn::make('data_sources_count')
                     ->label('Data Sources Count')
-                    ->counts('dataSources')
                     ->sortable(),
                 Tables\Columns\TextColumn::make('createdBy.name')
                     ->label('Created By')
@@ -141,8 +179,10 @@ class TemplateCategoryResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         return parent::getEloquentQuery()
+            ->withCount(['templates as templates_count', 'dataSources as data_sources_count'])
             ->withoutGlobalScopes([
                 SoftDeletingScope::class,
-            ]);
+            ])
+            ->orderBy('sequence', 'asc');  // Ensures rows are displayed in sequence order
     }
 }
