@@ -15,8 +15,8 @@ class PollStrategyResolver
         $vendorName = DataSource::findOrFail($dataSourceId)->name;
 
         return match (strtolower($vendorName)) {
-            'vidu' => new ViduPollStrategy(),
-            'kling' => new KlingPollStrategy(),
+            'vidu' => new ViduPollStrategy($dataSourceId),
+            'kling' => new KlingPollStrategy($dataSourceId),
             default => throw new InvalidArgumentException("No poll strategy for vendor: {$vendorName}. Add a strategy or use generic."),
         };
     }

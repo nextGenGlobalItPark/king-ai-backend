@@ -13,13 +13,10 @@ class AiFeatureConfig extends Model
 
     protected $casts = [
         'standard_schema' => 'array',
-        'param_mapping' => 'array',
-        'default_params' => 'array',
+        'request_body_template' => 'array',
+        'response_mapping' => 'array',
         'extra_params' => 'array',
         'is_active' => 'boolean',
-        'created_at' => 'datetime',
-        'updated_at' => 'datetime',
-        'deleted_at' => 'datetime',
     ];
 
     public function feature()
@@ -35,5 +32,21 @@ class AiFeatureConfig extends Model
     public function createdBy()
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    /**
+     * Check if this is a JWT config
+     */
+    public function isJwtAuth(): bool
+    {
+        return $this->auth_type === 'jwt';
+    }
+
+    /**
+     * Check if this is a static token config
+     */
+    public function isStaticTokenAuth(): bool
+    {
+        return in_array($this->auth_type, ['token', 'bearer', 'static_token']);
     }
 }

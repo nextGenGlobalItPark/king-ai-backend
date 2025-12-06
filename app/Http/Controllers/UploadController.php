@@ -30,25 +30,69 @@ class UploadController extends Controller
         $purpose = $request->purpose;
         $file = $request->file('file');
 
-        // Dynamic mime validation based on purpose
-        $rules = [
-            'image' => 'mimes:jpg,jpeg,png,gif|max:5120', // 5MB
-            'cover' => 'mimes:jpg,jpeg,png,gif|max:5120', // 5MB
-            'video' => 'mimes:mp4,mov,avi,wmv,flv|max:102400', // 100MB
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $actualMimeType = finfo_file($finfo, $file->getRealPath());
+        finfo_close($finfo);
+
+        $allowedMimeTypes = [
+            'image' => ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
+            'cover' => ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
+            'video' => ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/x-ms-wmv', 'video/x-flv'],
         ];
 
-        $additionalValidator = Validator::make($request->all(), [
-            'file' => $rules[$purpose] ?? '',
-        ]);
+        if (!in_array($actualMimeType, $allowedMimeTypes[$purpose] ?? [])) {
+            return response()->json([
+                'errors' => [
+                    'file' => [
+                        'Invalid file type. Expected: ' . implode(', ', $allowedMimeTypes[$purpose] ?? []) .
+                        '. Got: ' . $actualMimeType
+                    ]
+                ]
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
 
-        if ($additionalValidator->fails()) {
-            return response()->json(['errors' => $additionalValidator->errors()], Response::HTTP_UNPROCESSABLE_ENTITY);
+        $maxSizes = [
+            'image' => 5 * 1024 * 1024,  // 5MB in bytes
+            'cover' => 5 * 1024 * 1024,  // 5MB in bytes
+            'video' => 100 * 1024 * 1024, // 100MB in bytes
+        ];
+
+        if ($file->getSize() > ($maxSizes[$purpose] ?? PHP_INT_MAX)) {
+            return response()->json([
+                'errors' => [
+                    'file' => ['File size exceeds maximum allowed: ' . ($maxSizes[$purpose] / 1024 / 1024) . 'MB']
+                ]
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
         try {
             $folder = 'templates'; // Specific folder as per requirement
             $extension = $file->getClientOriginalExtension();
-            $filename = Str::uuid() . '.' . $extension;
+
+            $allowedExtensions = [
+                'image' => ['jpg', 'jpeg', 'png', 'gif', 'webp'],
+                'cover' => ['jpg', 'jpeg', 'png', 'gif', 'webp'],
+                'video' => ['mp4', 'mov', 'avi', 'wmv', 'flv'],
+            ];
+
+            if (!in_array(strtolower($extension), $allowedExtensions[$purpose] ?? [])) {
+                // Force correct extension based on MIME type
+                $extensionMap = [
+                    'image/jpeg' => 'jpg',
+                    'image/png' => 'png',
+                    'image/gif' => 'gif',
+                    'image/webp' => 'webp',
+                    'video/mp4' => 'mp4',
+                    'video/quicktime' => 'mov',
+                    'video/x-msvideo' => 'avi',
+                    'video/x-ms-wmv' => 'wmv',
+                    'video/x-flv' => 'flv',
+                ];
+
+                $extension = $extensionMap[$actualMimeType] ?? 'bin';
+            }
+
+            $filename = Str::uuid() . '.' . strtolower($extension);
             $path = $file->storeAs($folder, $filename, 'public');
 
             return $this->success(

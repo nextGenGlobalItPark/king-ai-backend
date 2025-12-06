@@ -25,6 +25,7 @@ class UpdateAiFeatureRequest extends FormRequest
             'name' => 'required|string|max:50|unique:ai_features,name,' . $this->aiFeature?->id,
             'description' => 'nullable|string|max:255',
             'is_active' => 'boolean',
+            'data_source_id' => 'required|exists:data_sources,id',
         ];
     }
 }

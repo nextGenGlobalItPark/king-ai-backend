@@ -76,7 +76,7 @@ class AiFeatureController extends Controller
     /**
      * Update the specified resource in storage.
      */
-    public function update(UpdateAiFeatureRequest $request, Aifeature $aiFeature)
+    public function update(UpdateAiFeatureRequest $request, AiFeature $aiFeature)
     {
         try {
             $aiFeature->update($request->validated());
@@ -97,7 +97,7 @@ class AiFeatureController extends Controller
     /**
      * Remove the specified resource from storage.
      */
-    public function destroy(Aifeature $aiFeature)
+    public function destroy(AiFeature $aiFeature)
     {
         try {
             $aiFeature->delete();

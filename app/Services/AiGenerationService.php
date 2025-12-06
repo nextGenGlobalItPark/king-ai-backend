@@ -6,15 +6,20 @@ use App\Models\AiFeature;
 use App\Models\DataSource;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ClientException;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\MessageFormatter;
+use GuzzleHttp\Middleware;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
-use Illuminate\Support\Facades\Config;
 use InvalidArgumentException;
 
 class AiGenerationService
 {
-    public function __construct(private PollStrategyResolver $strategyResolver) {}
+    public function __construct(
+        private PollStrategyResolver $strategyResolver,
+        private AuthStrategyResolver $authResolver,
+    ) {}
 
     /**
      * Generate content using the specified AI feature and input.
@@ -24,48 +29,55 @@ class AiGenerationService
         $feature = AiFeature::where('name', $featureName)
             ->where('is_active', true)
             ->firstOrFail();
-
-        $vendor = Config::get('ai.default_vendor', 'vidu');
-        $dataSource = DataSource::query()->whereLike('name', $vendor)->first();
-        if (!$dataSource) {
-            throw new InvalidArgumentException("No data source found for vendor '{$vendor}'.");
+        Log::debug($feature);
+        $dataSourceId = $feature->data_source_id;
+        if (!$dataSourceId) {
+            throw new InvalidArgumentException("No data source found for vendor.");
         }
-        $dataSourceId = $dataSource->id;
         $config = $feature->configs()
             ->where('data_source_id', $dataSourceId)
             ->where('is_active', true)
             ->orderBy('priority')
             ->firstOrFail();
 
-        // Decode JSON fields if strings (fallback for cast issues)
+        // Decode JSON fields
         $standardSchema = $this->decodeIfString($config->standard_schema, 'standard_schema');
-        $paramMapping = $this->decodeIfString($config->param_mapping, 'param_mapping');
-        $defaultParams = $this->decodeIfString($config->default_params ?? [], 'default_params');
-        $extraParams = $this->decodeIfString($config->extra_params ?? [], 'extra_params');
-        $responseMapping = $this->decodeIfString($config->response_mapping ?? [], 'response_mapping');
+        $requestBodyTemplate = $this->decodeIfString($config->request_body_template ?? null, 'request_body_template');
 
-        $rules = $this->buildValidationRules($standardSchema, $input);
-        $validator = Validator::make($input, $rules);
+        // Apply defaults from schema
+        $inputWithDefaults = $this->applySchemaDefaults($input, $standardSchema);
+
+        $rules = $this->buildValidationRules($standardSchema);
+        $validator = Validator::make($inputWithDefaults, $rules);
         if ($validator->fails()) {
             throw new InvalidArgumentException(
-                'Invalid input for ' . $vendor . ' (' . $featureName . '): ' . json_encode($validator->errors())
+                'Invalid input for ('. $featureName . '): ' . json_encode($validator->errors())
             );
         }
 
         // Map input to service-specific params
-        $serviceParams = array_merge(
-            $defaultParams,
-            $this->mapParams($input, $paramMapping),
-            $extraParams
+        $serviceParams = $this->buildFromTemplate(
+            $requestBodyTemplate,
+            $inputWithDefaults,
+            $standardSchema
         );
         Log::debug('Service params for generation', ['params' => $serviceParams]);
 
+        $authStrategy = $this->authResolver->resolve($config);
+        $authHeaderValue = $authStrategy->generateAuthHeader($config);
+
         // Build request options (redact sensitive for log)
+        $handlerStack = HandlerStack::create();
+
+        $handlerStack->push(Middleware::log(
+            Log::getLogger(),
+            new MessageFormatter(MessageFormatter::DEBUG)
+        ));
         $client = new Client();
         $options = [
             'method' => $config->method,
             'headers' => [
-                $config->auth_header_key => $config->auth_type . ' ' . env($config->auth_value_from_env),
+                $config->auth_header_key => $authHeaderValue,
                 'Content-Type' => $config->content_type,
             ],
             'timeout' => 120,
@@ -92,7 +104,7 @@ class AiGenerationService
             $response = $client->request($config->method, $config->endpoint, $options);
         } catch (ClientException $e) {
             if ($e->getResponse()->getStatusCode() === 429) {
-                Log::warning('Rate limit hit; job will retry', ['vendor' => $vendor]);
+                Log::warning('Rate limit hit; job will retry');
                 throw $e;  // Let job retry
             }
             throw $e;
@@ -100,12 +112,209 @@ class AiGenerationService
 
         $responseData = json_decode($response->getBody()->getContents(), true);
 
+        Log::debug('Response of API Call ', ['response' => $responseData]);
+
         // Extract task_id via mapping
-        $taskIdPath = $responseMapping['task_id_path'] ?? 'task_id';
+        $responseMapping = $this->decodeIfString($config->response_mapping ?? [], 'response_mapping');
+        $taskIdPath = $responseMapping['task_id'] ?? 'task_id';
+        Log::debug('Task ID path', ['task_id' => $taskIdPath]);
         $taskId = data_get($responseData, $taskIdPath) ?? $responseData['id'] ?? uniqid('task_');
         $responseData['task_id'] = $taskId;  // Ensure present
 
         return $responseData;
+    }
+
+    /**
+     * Apply default values from schema to input
+     *
+     * @param array $input User-provided input
+     * @param array $schema Standard schema definition
+     * @return array Input with defaults applied
+     */
+    private function applySchemaDefaults(array $input, array $schema): array
+    {
+        $result = $input;
+
+        foreach ($schema['fields'] ?? [] as $field) {
+            $name = $field['name'];
+
+            // If field has default and not provided by user, apply default
+            if (isset($field['default']) && !array_key_exists($name, $result)) {
+                $result[$name] = $field['default'];
+
+                Log::debug('Applied default value', [
+                    'field' => $name,
+                    'default' => $field['default']
+                ]);
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Build request body from template by replacing placeholders
+     *
+     * @param array $template Request body template with {{placeholders}}
+     * @param array $input User input with defaults applied
+     * @param array $schema Standard schema for type information
+     * @return array Final request body
+     */
+    private function buildFromTemplate(
+        array $template,
+        array $input,
+        array $schema
+    ): array {
+        $json = json_encode($template, JSON_PRETTY_PRINT);
+
+        // Build type map from schema
+        $typeMap = [];
+        foreach ($schema['fields'] ?? [] as $field) {
+            $typeMap[$field['name']] = $field['type'] ?? 'string';
+        }
+
+        // Replace placeholders with actual values
+        foreach ($input as $key => $value) {
+            $placeholder = '"{{' . $key . '}}"';
+            $type = $typeMap[$key] ?? 'string';
+
+            // Convert to proper JSON representation based on type
+            $replacement = match($type) {
+                'integer', 'number' => is_numeric($value) ? (int)$value : 0,
+                'float' => is_numeric($value) ? (float)$value : 0.0,
+                'boolean' => $value ? 'true' : 'false',
+                'array', 'object' => json_encode($value),
+                default => json_encode($value), // string
+            };
+
+            $json = str_replace($placeholder, $replacement, $json);
+        }
+
+        // Remove any remaining placeholders (shouldn't happen if schema is correct)
+        if (preg_match('/{{[^}]+}}/', $json)) {
+            Log::warning('Template has unreplaced placeholders', ['json' => $json]);
+            $json = $this->removeUnusedPlaceholders($json);
+        }
+
+        $result = json_decode($json, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            Log::error('Failed to parse template result', [
+                'error' => json_last_error_msg(),
+                'json' => $json
+            ]);
+            throw new InvalidArgumentException('Invalid template result: ' . json_last_error_msg());
+        }
+
+        return $result;
+    }
+
+    /**
+     * Remove unused placeholders and clean up JSON structure
+     *
+     * @param string $json JSON string with placeholders
+     * @return string Cleaned JSON string
+     */
+    private function removeUnusedPlaceholders(string $json): string
+    {
+        // Remove lines with unreplaced placeholders
+        $lines = explode("\n", $json);
+        $cleaned = array_filter($lines, function($line) {
+            return !preg_match('/{{[^}]+}}/', $line);
+        });
+
+        $json = implode("\n", $cleaned);
+
+        // Fix trailing commas
+        $json = preg_replace('/,(\s*[}\]])/', '$1', $json);
+
+        // Fix double commas
+        $json = preg_replace('/,\s*,/', ',', $json);
+
+        return $json;
+    }
+
+    /**
+     * Build validation rules from schema
+     *
+     * @param array $schema Standard schema definition
+     * @return array Laravel validation rules
+     */
+    private function buildValidationRules(array $schema): array
+    {
+        $rules = [];
+
+        foreach ($schema['fields'] ?? [] as $field) {
+            $name = $field['name'];
+
+            // Skip hidden fields from user input validation
+            if (!empty($field['hidden'])) {
+                continue;
+            }
+
+            $required = $field['required'] ?? false;
+            $type = $field['type'] ?? 'string';
+
+            // If field has default, it becomes optional
+            if (isset($field['default'])) {
+                $required = false;
+            }
+
+            $rule = $required ? 'required' : 'nullable';
+
+            if ($type === 'array') {
+                $rule .= '|array';
+                if (isset($field['min'])) $rule .= '|min:' . $field['min'];
+                if (isset($field['max'])) $rule .= '|max:' . $field['max'];
+                if (isset($field['each'])) {
+                    $rules[$name . '.*'] = $field['each'];
+                }
+            } else {
+                $rule .= '|' . $type;
+                if (isset($field['max'])) $rule .= '|max:' . $field['max'];
+            }
+
+            $rules[$name] = $rule;
+        }
+
+        Log::debug('Generated validation rules', ['rules' => $rules]);
+
+        return $rules;
+    }
+
+    /**
+     * Map standard input fields to vendor-specific fields (LEGACY)
+     * Only used when request_body_template is not set
+     */
+    private function mapParams(array $input, array $mapping): array
+    {
+        return collect($mapping)
+            ->filter(fn($serviceKey) => $serviceKey !== null)
+            ->mapWithKeys(fn($serviceKey, $standardKey) => [
+                $serviceKey => $input[$standardKey] ?? '',
+            ])
+            ->toArray();
+    }
+
+    /**
+     * Helper to decode JSON string to array if needed.
+     */
+    private function decodeIfString($value, string $fieldName): array
+    {
+        if (is_null($value)) {
+            return [];
+        }
+
+        if (is_string($value)) {
+            $decoded = json_decode($value, true);
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                Log::error("Invalid JSON in {$fieldName}: " . json_last_error_msg(), ['raw' => $value]);
+                throw new InvalidArgumentException("Invalid JSON in {$fieldName}: " . json_last_error_msg());
+            }
+            return $decoded ?? [];
+        }
+
+        return is_array($value) ? $value : [];
     }
 
     /**
@@ -114,7 +323,10 @@ class AiGenerationService
     public function pollStatus(string $taskId, int $dataSourceId, string $featureName): array
     {
         $feature = AiFeature::where('name', $featureName)->firstOrFail();
-        $config = $feature->configs()->where('data_source_id', $dataSourceId)->where('is_active', true)->firstOrFail();
+        $config = $feature->configs()
+            ->where('data_source_id', $dataSourceId)
+            ->where('is_active', true)
+            ->firstOrFail();
 
         $generateEndpoint = $config->endpoint;
         if (empty($generateEndpoint)) {
@@ -124,6 +336,9 @@ class AiGenerationService
         $strategy = $this->strategyResolver->resolve($dataSourceId);
         $pollEndpoint = $strategy->buildEndpoint($generateEndpoint, $taskId);
 
+        $authStrategy = $this->authResolver->resolve($config);
+        $authHeaderValue = $authStrategy->generateAuthHeader($config);
+
         $dataSource = DataSource::find($dataSourceId);
         $vendorName = $dataSource->name ?? 'unknown';
         Log::debug('Polling task', ['task_id' => $taskId, 'endpoint' => $pollEndpoint, 'vendor' => $vendorName]);
@@ -132,7 +347,7 @@ class AiGenerationService
         try {
             $response = $client->get($pollEndpoint, [
                 'headers' => [
-                    $config->auth_header_key => $config->auth_type . ' ' . env($config->auth_value_from_env),
+                    $config->auth_header_key => $authHeaderValue,
                 ],
                 'timeout' => 30,
             ]);
@@ -146,89 +361,11 @@ class AiGenerationService
         }
 
         $data = json_decode($response->getBody()->getContents(), true);
-        Log::debug('Raw poll response (redacted)', ['data_keys' => array_keys($data ?? [])]);  // Avoid full dump
+        $responseMapping = $this->decodeIfString($config->response_mapping ?? [], 'response_mapping');
 
-        return $strategy->parseResponse($data ?? []);
-    }
+        Log::debug('Response mapping', ['responseMapping' => $responseMapping]);
+        Log::debug($data);
 
-    /**
-     * Helper to decode JSON string to array if needed.
-     */
-    private function decodeIfString($value, string $fieldName): array
-    {
-        if (is_string($value)) {
-            $decoded = json_decode($value, true);
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                Log::error("Invalid JSON in {$fieldName}: " . json_last_error_msg(), ['raw' => $value]);
-                throw new InvalidArgumentException("Invalid JSON in {$fieldName}: " . json_last_error_msg());
-            }
-            return $decoded ?? [];
-        }
-        return is_array($value) ? $value : [];
-    }
-
-    /**
-     * Build dynamic validation rules from schema.
-     */
-    private function buildValidationRules(array $schema, array $input): array
-    {
-        $rules = [];
-
-        if (isset($schema['fields']) && is_array($schema['fields'])) {
-            foreach ($schema['fields'] as $fieldDef) {
-                $name = $fieldDef['name'];
-                $required = $fieldDef['required'] ?? false;
-                $type = $fieldDef['type'] ?? 'string';
-                $baseRule = $required ? 'required' : 'sometimes';
-
-                if ($type === 'array') {
-                    // Main array rule: NO '|type' or '|each' here
-                    $rules[$name] = $baseRule . '|array|min:' . ($fieldDef['min'] ?? 1) . '|max:' . ($fieldDef['max'] ?? 10);
-
-                    // Sub-rule for items: Separate key for 'each'
-                    if (isset($fieldDef['each'])) {
-                        $rules[$name . '.*'] = $fieldDef['each'];  // e.g., 'string'
-                    }
-                } else {
-                    // Non-array: Standard rule
-                    $rule = $baseRule . '|' . $type;
-                    if (isset($fieldDef['max'])) {
-                        $rule .= '|max:' . $fieldDef['max'];
-                    }
-                    $rules[$name] = $rule;
-                }
-                // Ignore UI fields (label, ui_hint, etc.)
-            }
-        } else {
-            // Legacy fallback: Apply same logic
-            foreach (array_merge($schema['required'] ?? [], $schema['optional'] ?? []) as $field) {
-                $isRequired = in_array($field, $schema['required'] ?? []);
-                $baseRule = $isRequired ? 'required' : 'sometimes';
-                if ($field === 'images') {
-                    $rules[$field] = $baseRule . '|array|min:3|max:5';  // Hardcoded for legacy
-                    $rules[$field . '.*'] = 'string';  // Sub-rule
-                } else {
-                    $rules[$field] = $baseRule . '|string';
-                }
-            }
-        }
-
-        // DEBUG: Log rules to confirm (remove after fix)
-        \Illuminate\Support\Facades\Log::debug('Generated validation rules for schema', ['rules' => $rules]);
-
-        return $rules;
-    }
-
-    /**
-     * Map standard input fields to vendor-specific fields.
-     */
-    private function mapParams(array $input, array $mapping): array
-    {
-        return collect($mapping)
-            ->filter(fn($serviceKey) => $serviceKey !== null)
-            ->mapWithKeys(fn($serviceKey, $standardKey) => [
-                $serviceKey => $input[$standardKey] ?? '',  // Empty string for optionals (vendors often accept)
-            ])
-            ->toArray();  // Don't filter nulls; use ''
+        return $strategy->parseResponse($data ?? [], $responseMapping);
     }
 }

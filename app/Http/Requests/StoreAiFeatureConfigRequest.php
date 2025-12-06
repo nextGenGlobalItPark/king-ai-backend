@@ -26,9 +26,12 @@ class StoreAiFeatureConfigRequest extends FormRequest
             'data_source_id' => 'required|integer|exists:data_sources,id',
             'endpoint' => 'required|url|max:255',
             'method' => 'required|in:GET,POST,PUT,PATCH,DELETE',
-            'auth_type' => 'nullable|string|in:Token,bearer',
+            'auth_type' => 'required|in:token,bearer,static_token,jwt',
             'auth_header_key' => 'nullable|string|max:50',
             'auth_value_from_env' => 'required|string|max:50',
+            'auth_secret_key_env' => 'required_if:auth_type,jwt|string|max:50',
+            'jwt_expiry_seconds' => 'nullable|integer|min:60|max:86400', // 1min to 24hrs
+            'jwt_nbf_offset_seconds' => 'nullable|integer|min:0|max:300', // 0 to 5min
             'content_type' => 'nullable|string|max:50',
             'body_format' => 'nullable|in:json,form-data,urlencoded',
             'param_mapping' => 'required|json',

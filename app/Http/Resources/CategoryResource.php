@@ -39,9 +39,8 @@ class CategoryResource extends JsonResource
                                 'auth_value_from_env' => $config->auth_value_from_env,
                                 'content_type' => $config->content_type,
                                 'body_format' => $config->body_format,
-                                'param_mapping' => $config->param_mapping,
-                                'default_params' => $config->default_params,
-                                'extra_params' => $config->extra_params,
+                                'request_body_template' => $config->request_body_template,
+                                'response_mapping' => $config->response_mapping,
                                 'is_active' => $config->is_active,
                                 'priority' => $config->priority,
                             ];

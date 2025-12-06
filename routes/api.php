@@ -7,6 +7,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\TemplateController;
 use App\Http\Controllers\UploadController;
+use App\Http\Controllers\VendorStatusMappingController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\UserController;
 
@@ -39,10 +40,38 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('templates', TemplateController::class);
 
     Route::apiResource('ai-features', AiFeatureController::class);
-    Route::apiResource('ai-feature-configs', AiFeatureConfigController::class);
+    Route::prefix('ai-feature-configs')->group(function () {
+
+        // List & Show (unchanged)
+        Route::get('/', [AiFeatureConfigController::class, 'index']);
+        Route::get('/{aiFeatureConfig}', [AiFeatureConfigController::class, 'show']);
+
+        // Create - Type-specific
+        Route::post('/static-token', [AiFeatureConfigController::class, 'storeStaticToken']);
+        Route::post('/jwt', [AiFeatureConfigController::class, 'storeJwt']);
+
+        // Update - Type-specific
+        Route::put('/{aiFeatureConfig}/static-token', [AiFeatureConfigController::class, 'updateStaticToken']);
+        Route::put('/{aiFeatureConfig}/jwt', [AiFeatureConfigController::class, 'updateJwt']);
+
+        // Switch auth type
+        Route::patch('/{aiFeatureConfig}/switch-auth', [AiFeatureConfigController::class, 'switchAuthType']);
+
+        // Delete (unchanged)
+        Route::delete('/{aiFeatureConfig}', [AiFeatureConfigController::class, 'destroy']);
+    });
 
     Route::post('/generate/{feature}', [AiController::class, 'generate']);
     Route::get('/status/{jobId}', [AiController::class, 'status']);
 
     Route::post('/upload', [UploadController::class, 'upload']);
+
+    Route::prefix('task-status')->group(function () {
+        Route::get('/', [VendorStatusMappingController::class, 'index']);
+        Route::post('/', [VendorStatusMappingController::class, 'store']);
+        Route::get('/{vendorStatusMapping}', [VendorStatusMappingController::class, 'show']);
+        Route::put('/{vendorStatusMapping}', [VendorStatusMappingController::class, 'update']);
+        Route::delete('/{vendorStatusMapping}', [VendorStatusMappingController::class, 'destroy']);
+
+    });
 });

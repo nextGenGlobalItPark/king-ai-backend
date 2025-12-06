@@ -10,7 +10,6 @@ use App\Models\Template;
 use App\Models\TemplateContent;
 use App\Traits\ResponseTrait;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;

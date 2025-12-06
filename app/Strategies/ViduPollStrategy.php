@@ -3,10 +3,17 @@
 namespace App\Strategies;
 
 use App\Contracts\PollStrategyInterface;
+use App\Models\VendorStatusMapping;
 use Illuminate\Support\Facades\Log;
 
 class ViduPollStrategy implements PollStrategyInterface
 {
+    private ?VendorStatusMapping $statusMapping = null;
+    public function __construct(int $dataSourceId)
+    {
+        // Load status mapping for this vendor
+        $this->statusMapping = VendorStatusMapping::where('data_source_id', $dataSourceId)->first();
+    }
     public function buildEndpoint(string $generateEndpoint, string $taskId): string
     {
         // Vidu-specific: From '/ent/v2/text2video' → '/ent/v2/tasks/{taskId}/creations'

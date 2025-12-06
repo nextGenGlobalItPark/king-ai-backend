@@ -24,6 +24,10 @@ class AiFeature extends Model
     {
         return $this->belongsTo(User::class, 'created_by');
     }
+    public function dataSource()
+    {
+        return $this->belongsTo(DataSource::class, 'data_source_id');
+    }
 
     public function templates()
     {

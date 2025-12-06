@@ -165,9 +165,9 @@ class CategoryController extends Controller
         try {
             DB::beginTransaction();
             $category = TemplateCategory::findOrFail($id);
-            event(new CategoryEvent($category, 'deleted'));
             $category->delete();
             DB::commit();
+            event(new CategoryEvent($category, 'deleted'));
             return $this->success(
                 message: 'Template category deleted successfully'
             );

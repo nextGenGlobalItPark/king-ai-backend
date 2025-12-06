@@ -29,7 +29,7 @@ class AiGenerationJob implements ShouldQueue
         public ?int $userId = null,
         public ?int $dataSourceId = null,  // Prioritize this over vendor string
         public string $jobId
-    ) {}
+    ) { }
 
     public function handle(AiGenerationService $service): void
     {
@@ -37,18 +37,14 @@ class AiGenerationJob implements ShouldQueue
         try {
             Log::debug("AI GenerationJob started", ['job_id' => $this->jobId]);
 
-            // Resolve dataSourceId
-            if (!$this->dataSourceId) {
-                $vendor = Config::get('ai.default_vendor', 'vidu');
-                $dataSource = DataSource::query()->whereLike('name', $vendor)->first();
-            } else {
-                $dataSource = DataSource::find($this->dataSourceId);
-            }
+            $dataSource = DataSource::find($this->dataSourceId);
             if (!$dataSource) {
-                throw new \InvalidArgumentException("No data source found for ID '{$this->dataSourceId}' or default '{$vendor}'");
+                throw new \InvalidArgumentException("No data source found for ID '{$this->dataSourceId}'");
             }
             $dataSourceId = $dataSource->id;
 
+            Log::debug("AI GenerationJob started", ['job_id' => $this->jobId]);
+            Log::debug($this->feature);
             // Create or update job record
             $aiJob = AiJob::updateOrCreate(
                 ['queue_job_id' => $this->jobId],

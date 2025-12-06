@@ -26,6 +26,11 @@ class DataSource extends Model
 
     public function scopeWhereLike($query, $field, $value)
     {
+        $value = str_replace(
+            ['\\', '%', '_'],
+            ['\\\\', '\\%', '\\_'],
+            $value
+        );
         return $query->where($field, 'like', "%{$value}%");
     }
 }
