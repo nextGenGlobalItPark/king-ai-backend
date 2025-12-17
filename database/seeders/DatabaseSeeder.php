@@ -17,8 +17,8 @@ class DatabaseSeeder extends Seeder
             AdminSeeder::class,
             DataSourceSeeder::class,
             TemplateCategoriesSeeder::class,
-            AiFeaturesSeeder::class,
-            AiFeatureConfigsSeeder::class
+//            AiFeaturesSeeder::class,
+//            AiFeatureConfigsSeeder::class
         ]);
 
     }

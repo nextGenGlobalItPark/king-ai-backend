@@ -4,8 +4,6 @@ namespace App\Filament\Resources;
 
 use App\Filament\Resources\TemplateResource\Pages;
 use App\Models\Template;
-use App\Models\TemplateCategory;
-use App\Models\AiFeature;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
@@ -13,211 +11,240 @@ use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
-use Filament\Forms\Components\Repeater;
-use Filament\Forms\Components\FileUpload;
-use Filament\Forms\Components\Select;
-use Filament\Forms\Components\TextInput;
-use Filament\Forms\Components\Textarea;
-use Filament\Forms\Components\Toggle;
-use Filament\Tables\Columns\TextColumn;
-use Filament\Tables\Columns\IconColumn;
-use Filament\Tables\Actions\ActionGroup;
-use Filament\Tables\Actions\EditAction;
-use Filament\Tables\Actions\DeleteAction;
-use Filament\Tables\Actions\ForceDeleteAction;
-use Filament\Tables\Actions\RestoreAction;
-use Filament\Tables\Actions\BulkActionGroup;
-use Filament\Tables\Actions\DeleteBulkAction;
-use Filament\Tables\Actions\ForceDeleteBulkAction;
-use Filament\Tables\Actions\RestoreBulkAction;
-use Filament\Tables\Filters\TrashedFilter;
-use Filament\Notifications\Notification;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
 
 class TemplateResource extends Resource
 {
     protected static ?string $model = Template::class;
 
-    protected static ?string $navigationIcon = 'heroicon-o-document-text';
+    protected static ?string $navigationIcon = 'heroicon-o-document-duplicate';
 
     protected static ?string $navigationLabel = 'Templates';
 
-    protected static ?string $pluralLabel = 'Templates';
+    protected static ?string $navigationGroup = 'Content Management';
 
     public static function form(Form $form): Form
     {
         return $form
             ->schema([
-                Forms\Components\Section::make('Template Details')
+                Forms\Components\Section::make('Template Information')
                     ->schema([
                         Forms\Components\TextInput::make('name')
-                            ->label('Name')
                             ->required()
-                            ->maxLength(255),
-                        Forms\Components\Select::make('template_category_id')
-                            ->label('Template Category')
-                            ->options(TemplateCategory::pluck('template_category_name', 'id'))
+                            ->maxLength(255)
+                            ->placeholder('e.g., Balloon Parade'),
+
+                        Forms\Components\Select::make('templateCategories')
+                            ->label('Template Categories')
+                            ->relationship('templateCategories', 'template_category_name')
+                            ->multiple()
                             ->required()
-                            ->searchable(),
-                        Forms\Components\Select::make('ai_feature_id')
-                            ->label('AI Feature')
-                            ->options(AiFeature::pluck('name', 'id'))
-                            ->required()
-                            ->searchable(),
+                            ->searchable()
+                            ->preload()
+                            ->helperText('Select one or more categories for this template')
+                            ->createOptionForm([
+                                Forms\Components\TextInput::make('template_category_name')
+                                    ->required()
+                                    ->maxLength(255),
+                                Forms\Components\TextInput::make('template_category_slug')
+                                    ->required()
+                                    ->maxLength(255),
+                            ]),
+
                         Forms\Components\TextInput::make('credit_cost')
                             ->label('Credit Cost')
                             ->numeric()
+                            ->default(5)
                             ->minValue(0)
-                            ->nullable(),
-                        Toggle::make('is_active')
-                            ->label('Is Active')
-                            ->default(true),
-                        Select::make('state')
-                            ->label('State')
+                            ->required()
+                            ->helperText('Number of credits required to use this template'),
+
+                        Forms\Components\TextInput::make('sequence')
+                            ->label('Display Order')
+                            ->numeric()
+                            ->default(0)
+                            ->minValue(0)
+                            ->required()
+                            ->helperText('Lower numbers appear first'),
+                    ])
+                    ->columns(2),
+
+                Forms\Components\Section::make('AI Configuration')
+                    ->schema([
+                        Forms\Components\Select::make('ai_feature_id')
+                            ->label('AI Feature')
+                            ->relationship('aiFeature', 'name')
+                            ->required()
+                            ->searchable()
+                            ->preload()
+                            ->live()
+                            ->helperText('Select the AI feature this template uses'),
+
+                        Forms\Components\Select::make('data_source_id')
+                            ->label('Data Source')
+                            ->relationship('dataSource', 'name')
+                            ->required()
+                            ->searchable()
+                            ->preload()
+                            ->helperText('Select the vendor/API provider for this template')
+                            ->createOptionForm([
+                                Forms\Components\TextInput::make('name')
+                                    ->required()
+                                    ->maxLength(255)
+                                    ->placeholder('e.g., Kling, Vidu'),
+                                Forms\Components\TextInput::make('url')
+                                    ->url()
+                                    ->maxLength(500)
+                                    ->placeholder('https://api.vendor.com'),
+                            ]),
+                    ])
+                    ->columns(2)
+                    ->description('Configure which AI feature and data source this template uses'),
+
+                Forms\Components\Section::make('Status & Settings')
+                    ->schema([
+                        Forms\Components\Toggle::make('is_active')
+                            ->label('Active')
+                            ->default(true)
+                            ->helperText('Only active templates are visible to users'),
+
+                        Forms\Components\Select::make('state')
                             ->options([
                                 'test' => 'Test',
                                 'live' => 'Live',
                             ])
                             ->default('test')
-                            ->required(),
-                        TextInput::make('sequence')
-                            ->label('Sequence')
-                            ->numeric()
-                            ->default(0)
-                            ->minValue(0),
+                            ->required()
+                            ->helperText('Test templates are only visible in test environment'),
                     ])
                     ->columns(2),
-                Forms\Components\Section::make('Template Contents')
-                    ->schema([
-                        Repeater::make('templateContents')
-                            ->relationship('templateContents')  // Auto-load and sync existing data
-                            ->label('Contents')
-                            ->schema([
-                                Select::make('template_content_type')
-                                    ->label('Type')
-                                    ->options([
-                                        'image' => 'Image',
-                                        'video' => 'Video',
-                                        'cover' => 'Cover',
-                                    ])
-                                    ->required(),
-                                FileUpload::make('template_content')
-                                    ->label('Content File')
-                                    ->acceptedFileTypes([
-                                        'image/jpeg',
-                                        'image/png',
-                                        'image/gif',
-                                        'video/mp4',
-                                        'video/webm',
-                                        'video/ogg',
-                                    ])
-                                    ->maxSize(102400)  // 100MB
-                                    ->directory('templates/contents')
-                                    ->visibility('public')
-                                    ->required(),
-                                Textarea::make('text')
-                                    ->label('Text')
-                                    ->rows(3)
-                                    ->columnSpanFull(),
-                            ])
-                            ->columns(1)
-                            ->defaultItems(1)
-                            ->reorderable(),
-                    ])
-                    ->collapsible(),
-                Forms\Components\Section::make('Relations')
-                    ->schema([
-                        Forms\Components\Select::make('created_by')
-                            ->label('Created By')
-                            ->relationship('createdBy', 'name')
-                            ->searchable()
-                            ->preload()
-                            ->dehydrated(false)
-                            ->visible(false),
-                    ])
-                    ->collapsible(),
             ]);
     }
 
     public static function table(Table $table): Table
     {
         return $table
-            ->reorderable('sequence')  // Enables drag-and-drop reordering using the 'sequence' column
             ->columns([
-                TextColumn::make('name')
-                    ->label('Name')
+                Tables\Columns\TextColumn::make('name')
                     ->searchable()
-                    ->sortable(),
-                TextColumn::make('templateCategory.template_category_name')
-                    ->label('Category')
+                    ->sortable()
+                    ->weight('bold'),
+
+                Tables\Columns\TextColumn::make('templateCategories.template_category_name')
+                    ->label('Categories')
                     ->searchable()
-                    ->sortable(),
-                TextColumn::make('aiFeature.name')
+                    ->badge()
+                    ->color('info')
+                    ->separator(',')
+                    ->limitList(2)
+                    ->tooltip(fn ($record) => $record->templateCategories->pluck('template_category_name')->join(', ')),
+
+                Tables\Columns\TextColumn::make('aiFeature.name')
                     ->label('AI Feature')
                     ->searchable()
-                    ->sortable(),
-                TextColumn::make('credit_cost')
-                    ->label('Credit Cost')
+                    ->sortable()
+                    ->badge()
+                    ->color('success'),
+
+                Tables\Columns\TextColumn::make('dataSource.name')
+                    ->label('Data Source')
+                    ->searchable()
+                    ->sortable()
+                    ->badge()
+                    ->color('warning'),
+
+                Tables\Columns\TextColumn::make('credit_cost')
+                    ->label('Credits')
                     ->numeric()
-                    ->sortable(),
-                IconColumn::make('is_active')
+                    ->sortable()
+                    ->badge()
+                    ->color('primary'),
+
+                Tables\Columns\IconColumn::make('is_active')
                     ->label('Active')
                     ->boolean()
                     ->trueIcon('heroicon-o-check-circle')
                     ->falseIcon('heroicon-o-x-circle')
+                    ->trueColor('success')
+                    ->falseColor('danger')
                     ->sortable(),
-                TextColumn::make('state')
-                    ->label('State')
+
+                Tables\Columns\TextColumn::make('state')
                     ->badge()
                     ->color(fn (string $state): string => match ($state) {
-                        'test' => 'warning',
                         'live' => 'success',
+                        'test' => 'warning',
                         default => 'gray',
                     })
                     ->sortable(),
-                TextColumn::make('sequence')
-                    ->label('Sequence')
+
+                Tables\Columns\TextColumn::make('sequence')
+                    ->label('Order')
                     ->numeric()
                     ->sortable(),
-                TextColumn::make('template_contents_count')
-                    ->label('Contents Count')
-                    ->sortable()
-                    ->formatStateUsing(fn ($state) => $state ?? 0),  // Fallback to 0 if null
-                TextColumn::make('createdBy.name')
+
+                Tables\Columns\TextColumn::make('createdBy.name')
                     ->label('Created By')
-                    ->sortable()
+                    ->searchable()
                     ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('created_at')
+
+                Tables\Columns\TextColumn::make('created_at')
                     ->dateTime()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('updated_at')
+
+                Tables\Columns\TextColumn::make('updated_at')
                     ->dateTime()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
             ->filters([
-                TrashedFilter::make(),
+                Tables\Filters\SelectFilter::make('templateCategories')
+                    ->label('Category')
+                    ->relationship('templateCategories', 'template_category_name')
+                    ->searchable()
+                    ->preload()
+                    ->multiple(),
+
+                Tables\Filters\SelectFilter::make('ai_feature_id')
+                    ->label('AI Feature')
+                    ->relationship('aiFeature', 'name')
+                    ->searchable()
+                    ->preload(),
+
+                Tables\Filters\SelectFilter::make('data_source_id')
+                    ->label('Data Source')
+                    ->relationship('dataSource', 'name')
+                    ->searchable()
+                    ->preload(),
+
+                Tables\Filters\SelectFilter::make('state')
+                    ->options([
+                        'test' => 'Test',
+                        'live' => 'Live',
+                    ]),
+
+                Tables\Filters\TernaryFilter::make('is_active')
+                    ->label('Active Status')
+                    ->placeholder('All')
+                    ->trueLabel('Active Only')
+                    ->falseLabel('Inactive Only'),
             ])
             ->actions([
-                ActionGroup::make([
-                    EditAction::make(),
-                    DeleteAction::make(),
-                    ForceDeleteAction::make(),
-                    RestoreAction::make(),
-                ]),
+                Tables\Actions\EditAction::make(),
+                Tables\Actions\DeleteAction::make(),
+                Tables\Actions\ForceDeleteAction::make(),
+                Tables\Actions\RestoreAction::make(),
             ])
             ->bulkActions([
-                BulkActionGroup::make([
-                    DeleteBulkAction::make(),
-                    ForceDeleteBulkAction::make(),
-                    RestoreBulkAction::make(),
+                Tables\Actions\BulkActionGroup::make([
+                    Tables\Actions\DeleteBulkAction::make(),
+                    Tables\Actions\ForceDeleteBulkAction::make(),
+                    Tables\Actions\RestoreBulkAction::make(),
                 ]),
             ])
-            ->emptyStateActions([
-                Tables\Actions\CreateAction::make(),
-            ]);
+            ->defaultSort('sequence', 'asc')
+            ->reorderable('sequence')
+            ->striped();
     }
 
     public static function getRelations(): array
@@ -239,11 +266,6 @@ class TemplateResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         return parent::getEloquentQuery()
-            ->withCount('templateContents as template_contents_count')  // Alias the count attribute
-            ->with(['templateCategory', 'aiFeature', 'createdBy', 'templateContents'])
-            ->withoutGlobalScopes([
-                SoftDeletingScope::class,
-            ])
-            ->orderBy('sequence', 'asc');  // Ensures rows are displayed in sequence order
+            ->with(['templateCategories', 'aiFeature', 'dataSource', 'createdBy']);
     }
 }

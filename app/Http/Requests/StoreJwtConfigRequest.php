@@ -18,6 +18,7 @@ class StoreJwtConfigRequest extends FormRequest
             'data_source_id' => 'required|exists:data_sources,id',
 
             'endpoint' => 'required|url|max:500',
+            'status_check_endpoint' => 'required|url|max:500',
             'method' => 'required|in:GET,POST,PUT,PATCH,DELETE',
             'content_type' => 'required|string|max:100',
             'body_format' => 'required|in:json,form-data,form_params',
@@ -49,6 +50,7 @@ class StoreJwtConfigRequest extends FormRequest
             'data_source_id.required' => 'Data source is required',
             'data_source_id.exists' => 'Selected data source does not exist',
             'endpoint.required' => 'API endpoint is required',
+            'status_check_endpoint.required' => 'API for status check endpoint is required',
             'endpoint.url' => 'API endpoint must be a valid URL',
             'auth_value_from_env.required' => 'JWT access key environment variable is required',
             'auth_secret_key_env.required' => 'JWT secret key environment variable is required',

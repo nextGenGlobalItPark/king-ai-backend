@@ -24,6 +24,7 @@ class UpdateStaticTokenConfigRequest extends FormRequest
 
             // API Configuration
             'endpoint' => 'sometimes|url|max:500',
+            'status_check_endpoint' => 'sometimes|url|max:500',
             'method' => 'sometimes|in:GET,POST,PUT,PATCH,DELETE',
             'content_type' => 'sometimes|string|max:100',
             'body_format' => 'sometimes|in:json,form-data,form_params',
@@ -52,6 +53,7 @@ class UpdateStaticTokenConfigRequest extends FormRequest
     {
         return [
             'endpoint.url' => 'API endpoint must be a valid URL',
+            'status_check_endpoint.url' => 'API for status check endpoint must be a valid URL',
             'standard_schema.json' => 'Standard schema must be valid JSON',
             'request_body_template.json' => 'Request body template must be valid JSON',
             'response_mapping.json' => 'Response mapping must be valid JSON',

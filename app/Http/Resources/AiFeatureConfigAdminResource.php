@@ -23,6 +23,7 @@ class AiFeatureConfigAdminResource extends JsonResource
 
             // Connection details
             'endpoint' => $this->endpoint,
+            'status_check_endpoint' => $this->status_check_endpoint,
             'method' => $this->method,
             'content_type' => $this->content_type,
             'body_format' => $this->body_format,

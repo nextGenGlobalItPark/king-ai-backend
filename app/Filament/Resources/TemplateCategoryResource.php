@@ -180,9 +180,6 @@ class TemplateCategoryResource extends Resource
     {
         return parent::getEloquentQuery()
             ->withCount(['templates as templates_count', 'dataSources as data_sources_count'])
-            ->withoutGlobalScopes([
-                SoftDeletingScope::class,
-            ])
             ->orderBy('sequence', 'asc');  // Ensures rows are displayed in sequence order
     }
 }

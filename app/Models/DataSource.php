@@ -33,4 +33,9 @@ class DataSource extends Model
         );
         return $query->where($field, 'like', "%{$value}%");
     }
+
+    public function vendorStatusMapping()
+    {
+        return $this->hasOne(VendorStatusMapping::class, 'data_source_id');
+    }
 }

@@ -71,6 +71,11 @@ class Handler extends ExceptionHandler
             );
         }
 
+        // For Filament admin panel requests
+        if ($request->is('admin') || $request->is('admin/*')) {
+            return redirect()->guest('/admin/login');
+        }
+
         // For web routes (if any exist in the future), redirect to login
         // NOTE: This will only work if you define a 'login' route in web.php
         return redirect()->guest(route('login'));

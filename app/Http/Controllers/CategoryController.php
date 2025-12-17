@@ -3,12 +3,11 @@
 namespace App\Http\Controllers;
 
 use App\Events\CategoryEvent;
-use App\Http\Resources\CategoryResource;
+use App\Http\Resources\CategoryCollection;
 use App\Models\TemplateCategory;
 use App\Traits\ResponseTrait;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\Response;
@@ -23,13 +22,19 @@ class CategoryController extends Controller
     {
         try {
             $categories = TemplateCategory::with([
-                'dataSources',
-                'templates.createdBy',
                 'templates.aiFeature.configs.dataSource',
-                'templates.templateContents'
-            ])->get();
+                'templates.templateContents',
+                'dataSources.vendorStatusMapping',  // ✅ Add this line
+                'createdBy'
+            ])->orderBy('sequence')->get();
+//            $categories = TemplateCategory::with([
+//                'dataSources',
+//                'templates.createdBy',
+//                'templates.aiFeature.configs.dataSource',
+//                'templates.templateContents'
+//            ])->get();
             return $this->success(
-                data: CategoryResource::collection($categories),
+                data: new CategoryCollection($categories),
                 message: 'Template categories retrieved successfully'
             );
         } catch (\Exception $e) {
@@ -68,7 +73,7 @@ class CategoryController extends Controller
             event(new CategoryEvent($category, 'created'));
 
             return $this->success(
-                data: new CategoryResource($category->load('dataSources')),
+                data: new CategoryCollection($category),
                 message: 'Template category created successfully',
                 status: Response::HTTP_CREATED
             );
@@ -97,7 +102,7 @@ class CategoryController extends Controller
         try {
             $category = TemplateCategory::with('dataSources')->findOrFail($id);
             return $this->success(
-                data: new CategoryResource($category),
+                data: new CategoryCollection($category),
                 message: 'Template category retrieved successfully'
             );
         } catch (\Exception $e) {
@@ -138,7 +143,7 @@ class CategoryController extends Controller
 
             event(new CategoryEvent($category, 'updated'));
             return $this->success(
-                data: new CategoryResource($category->load('dataSources')),
+                data: new CategoryCollection($category),
                 message: 'Template category updated successfully'
             );
         } catch (\Exception $e) {

@@ -22,10 +22,9 @@ class UpdateAiFeatureRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'name' => 'required|string|max:50|unique:ai_features,name,' . $this->aiFeature?->id,
+            'name' => 'required|string|max:50',
             'description' => 'nullable|string|max:255',
-            'is_active' => 'boolean',
-            'data_source_id' => 'required|exists:data_sources,id',
+            'is_active' => 'boolean'
         ];
     }
 }

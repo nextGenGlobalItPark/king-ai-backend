@@ -5,7 +5,7 @@ namespace App\Filament\Resources\TemplateCategoryResource\Pages;
 use App\Filament\Resources\TemplateCategoryResource;
 use App\Models\TemplateCategory;
 use App\Events\CategoryEvent;  // Import the event
-use App\Http\Resources\CategoryResource;
+use App\Http\Resources\CategoryCollection;  // Changed from CategoryResource to CategoryCollection
 use Filament\Actions;
 use Filament\Resources\Pages\ListRecords;
 use Filament\Tables;
@@ -33,34 +33,38 @@ class ListTemplateCategories extends ListRecords
                 ->icon('heroicon-o-cloud-arrow-up')  // Updated icon name
                 ->color('success')
                 ->requiresConfirmation()
+                ->modalHeading('Export to Firebase')
+                ->modalDescription('This will export all template categories with vendor status mappings to Firebase.')
+                ->modalSubmitActionLabel('Export')
                 ->action(function () {
                     try {
                         // Instantiate Firebase Factory directly from config (avoids contract issues)
                         $factory = (new Factory)
                             ->withServiceAccount(storage_path('app/vidio-king-ai-firebase.json'))  // Adjust path if needed
-                            ->withDatabaseUri(Config::get('firebase.projects.your-project-id.database.url' ));
+                            ->withDatabaseUri(Config::get('firebase.projects.your-project-id.database.url'));
 
                         $database = $factory->createDatabase();
 
                         // Fetch all categories with necessary relations, ordered by sequence
                         $categories = TemplateCategory::with([
-                            'dataSources',
-                            'templates.createdBy',
                             'templates.aiFeature.configs.dataSource',
-                            'templates.templateContents'
+                            'templates.templateContents',
+                            'templates.createdBy',
+                            'templates.dataSource',
+                            'dataSources',  // No need for .vendorStatusMapping (CategoryCollection handles this)
+                            'createdBy'
                         ])
                             ->orderBy('sequence', 'asc')
                             ->get();
 
-                        // Transform using CategoryResource
-                        $transformedData = CategoryResource::collection($categories)->toArray(new Request());
-
-                        // Wrap in the expected response structure
+                        // Transform using CategoryCollection (this adds status_mapping at top level)
+                        $categoryCollection = new CategoryCollection($categories);
+                        $transformedData = $categoryCollection->toArray(new Request());
+                        // The CategoryCollection already wraps data in the correct format
+                        // So we just need to add metadata
                         $payload = [
-                            'success' => true,
-                            'data' => $transformedData,
-                            'message' => 'Template categories retrieved successfully',
-                            'errors' => null
+                            'data' => $transformedData,  // This has status_mapping + categories
+                            'last_updated' => now()->toIso8601String(),
                         ];
 
                         // Upload to Firebase (adjust path as needed, e.g., 'template_categories')
@@ -68,18 +72,23 @@ class ListTemplateCategories extends ListRecords
 
                         Notification::make()
                             ->title('Success')
-                            ->body('Template categories exported to Firebase successfully!')
+                            ->body('Successfully exported ' . $categories->count() . ' categories to Firebase')
                             ->success()
+                            ->duration(5000)
                             ->send();
 
                         Log::info('Template categories exported to Firebase', [
                             'count' => $categories->count(),
                             'user_id' => auth()->id(),
+                            'user_name' => auth()->user()->name ?? 'unknown',
+                            'timestamp' => now(),
                         ]);
 
                     } catch (Exception $e) {
                         Log::error('Failed to export template categories to Firebase: ' . $e->getMessage(), [
                             'user_id' => auth()->id(),
+                            'error' => $e->getMessage(),
+                            'trace' => $e->getTraceAsString(),
                         ]);
 
                         Notification::make()
@@ -154,9 +163,6 @@ class ListTemplateCategories extends ListRecords
 
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery()
-            ->withoutGlobalScopes([
-                SoftDeletingScope::class,
-            ]);
+        return parent::getEloquentQuery();
     }
 }
