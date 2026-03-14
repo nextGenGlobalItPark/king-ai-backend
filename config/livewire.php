@@ -8,12 +8,19 @@ return [
         'middleware' => null,
         'preview_mimes' => [
             'image/jpeg',
+            'image/jpg',
             'image/png',
             'image/gif',
+            'image/webp',
+            'image/svg+xml',
             'video/mp4',
+            'video/mpeg',
+            'video/quicktime',
             'video/webm',
             'video/ogg',
-        ],  // Add video MIME for preview
+            'video/x-msvideo',
+            'video/x-ms-wmv',
+        ],
         'max_upload_time' => 5,  // Minutes
         'max_file_size' => 100,  // MB
         'permissions_for_folders' => 0755,

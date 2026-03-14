@@ -4,6 +4,7 @@ namespace App\Http\Resources;
 
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\Facades\Storage;
 
 class CategoryResource extends JsonResource
 {
@@ -32,11 +33,11 @@ class CategoryResource extends JsonResource
                         'sequence' => $template->sequence,
                         'ai_feature' => $this->transformAiFeature($template),
                         'template_contents' => $this->transformTemplateContents($template),
-                        'data_source' => [
+                        'data_source' => $template->dataSource ? [
                             'id' => $template->dataSource->id,
                             'name' => $template->dataSource->name,
                             'url' => $template->dataSource->url,
-                        ],
+                        ] : null,
                     ];
                 });
             }),
@@ -87,14 +88,10 @@ class CategoryResource extends JsonResource
                 'priority' => $config->priority,
             ];
 
-            // Include standard_schema and request_body_template
             $configData['standard_schema'] = $config->standard_schema;
             $configData['request_body_template'] = $config->request_body_template;
-
-            // Always include response_mapping
             $configData['response_mapping'] = $config->response_mapping;
 
-            // Include JWT fields if applicable
             if ($config->auth_type === 'jwt') {
                 $configData['auth_secret_key_env'] = $config->auth_secret_key_env;
                 $configData['jwt_expiry_seconds'] = $config->jwt_expiry_seconds;
@@ -106,7 +103,7 @@ class CategoryResource extends JsonResource
     }
 
     /**
-     * Transform template contents
+     * Transform template contents with full URLs
      */
     private function transformTemplateContents($template)
     {
@@ -117,8 +114,8 @@ class CategoryResource extends JsonResource
         return $template->templateContents->map(function ($content) {
             return [
                 'id' => $content->id,
-                'template_content_type' => $content->template_content_type,
-                'template_content' => $content->template_content,
+                'type' => $content->template_content_type,
+                'url' => TemplateResource::buildContentUrl($content->template_content),
                 'text' => $content->text,
                 'created_at' => $content->created_at,
                 'updated_at' => $content->updated_at,
