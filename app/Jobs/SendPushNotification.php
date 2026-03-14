@@ -29,18 +29,23 @@ class SendPushNotification implements ShouldQueue
      */
     public function handle(PushNotificationServiceInterface $pushService): void
     {
-        $devices = Device::where('is_active', true)->cursor();
+        // Collect tokens in batches of 500 (FCM limit) instead of one-by-one
+        $tokenBatch = [];
 
-        foreach ($devices as $device) {
-            // Batch in service, but process per-device for logging
-            $pushService->sendToTokens([$device->token], $this->title, $this->body, $this->data);
+        Device::where('is_active', true)
+            ->select(['id', 'token'])
+            ->chunkById(500, function ($devices) use ($pushService, &$tokenBatch) {
+                $tokens = $devices->pluck('token')->toArray();
 
-            Log::info('Push sent to device', [
-                'device_id' => $device->id,
-                'token' => substr($device->token, 0, 10) . '...', // Partial for security
-                'data' => $this->data,
-            ]);
-        }
+                if (!empty($tokens)) {
+                    $pushService->sendToTokens($tokens, $this->title, $this->body, $this->data);
+
+                    Log::info('Push batch sent', [
+                        'device_count' => count($tokens),
+                        'data' => $this->data,
+                    ]);
+                }
+            });
     }
 
     public function failed(\Throwable $exception)

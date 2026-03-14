@@ -41,7 +41,7 @@ class AiFeatureConfigController extends Controller
             );
         } catch (\Exception $e) {
             return $this->error(
-                errors: $e->getCode(),
+                errors: null,
                 message: $e->getMessage()
             );
         }
@@ -85,7 +85,7 @@ class AiFeatureConfigController extends Controller
         } catch (\Exception $e) {
             DB::rollBack();
             return $this->error(
-                errors: $e->getCode(),
+                errors: null,
                 message: $e->getMessage()
             );
         }
@@ -157,7 +157,7 @@ class AiFeatureConfigController extends Controller
         } catch (\Exception $e) {
             DB::rollBack();
             return $this->error(
-                errors: $e->getCode(),
+                errors: null,
                 message: $e->getMessage()
             );
         }
@@ -198,7 +198,7 @@ class AiFeatureConfigController extends Controller
         } catch (\Exception $e) {
             DB::rollBack();
             return $this->error(
-                errors: $e->getCode(),
+                errors: null,
                 message: $e->getMessage()
             );
         }
@@ -266,7 +266,7 @@ class AiFeatureConfigController extends Controller
         } catch (\Exception $e) {
             DB::rollBack();
             return $this->error(
-                errors: $e->getCode(),
+                errors: null,
                 message: $e->getMessage()
             );
         }
@@ -286,7 +286,7 @@ class AiFeatureConfigController extends Controller
             );
         } catch (\Exception $e) {
             return $this->error(
-                errors: $e->getCode(),
+                errors: null,
                 message: $e->getMessage()
             );
         }

@@ -28,7 +28,7 @@ class AiFeatureController extends Controller
             );
         } catch (\Exception $e) {
             return $this->error(
-                errors: $e->getCode(),
+                errors: null,
                 message: $e->getMessage()
             );
         }
@@ -48,7 +48,7 @@ class AiFeatureController extends Controller
             );
         } catch (\Exception $e) {
             return $this->error(
-                errors: $e->getCode(),
+                errors: null,
                 message: $e->getMessage()
             );
         }
@@ -67,7 +67,7 @@ class AiFeatureController extends Controller
             );
         } catch (\Exception $e) {
             return $this->error(
-                errors: $e->getCode(),
+                errors: null,
                 message: $e->getMessage()
             );
         }
@@ -88,7 +88,7 @@ class AiFeatureController extends Controller
             );
         } catch (\Exception $e) {
             return $this->error(
-                errors: $e->getCode(),
+                errors: null,
                 message: $e->getMessage()
             );
         }
@@ -107,7 +107,7 @@ class AiFeatureController extends Controller
             );
         } catch (\Exception $e) {
             return $this->error(
-                errors: $e->getCode(),
+                errors: null,
                 message: $e->getMessage()
             );
         }

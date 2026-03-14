@@ -24,9 +24,9 @@ class CategoryCollection extends ResourceCollection
      */
     private function getGlobalStatusMappings()
     {
-        // Query all vendor status mappings directly
         $mappings = DB::table('vendor_status_mappings')
             ->join('data_sources', 'vendor_status_mappings.data_source_id', '=', 'data_sources.id')
+            ->whereNull('vendor_status_mappings.deleted_at')
             ->select(
                 'data_sources.id',
                 'data_sources.name',
@@ -51,18 +51,6 @@ class CategoryCollection extends ResourceCollection
         })->values()->toArray();
     }
 
-    /**
-     * Customize the outgoing response for the resource.
-     */
-    public function withResponse($request, $response)
-    {
-        $data = $response->getData(true);
-
-        $response->setData([
-            'success' => true,
-            'data' => $data,
-            'message' => 'Template categories retrieved successfully',
-            'errors' => null,
-        ]);
-    }
+    // Removed withResponse() - the controller already wraps in ResponseTrait::success()
+    // Having both creates double-wrapped JSON: {success: true, data: {success: true, data: ...}}
 }

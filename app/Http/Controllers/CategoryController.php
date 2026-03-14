@@ -22,23 +22,20 @@ class CategoryController extends Controller
     {
         try {
             $categories = TemplateCategory::with([
+                'templates' => fn($q) => $q->where('is_active', true)->orderBy('sequence'),
+                'templates.aiFeature.configs' => fn($q) => $q->where('is_active', true),
                 'templates.aiFeature.configs.dataSource',
                 'templates.templateContents',
-                'dataSources.vendorStatusMapping',  // ✅ Add this line
+                'dataSources.vendorStatusMapping',
                 'createdBy'
             ])->orderBy('sequence')->get();
-//            $categories = TemplateCategory::with([
-//                'dataSources',
-//                'templates.createdBy',
-//                'templates.aiFeature.configs.dataSource',
-//                'templates.templateContents'
-//            ])->get();
+
             return $this->success(
                 data: new CategoryCollection($categories),
                 message: 'Template categories retrieved successfully'
             );
         } catch (\Exception $e) {
-            return $this->error($e->getMessage(), $e->getCode());
+            return $this->error(errors: null, message: $e->getMessage());
         }
 
     }
@@ -79,7 +76,7 @@ class CategoryController extends Controller
             );
         } catch (\Exception $e) {
             DB::rollBack();
-            return $this->error($e->getMessage(), $e->getCode());
+            return $this->error(errors: null, message: $e->getMessage());
         }
     }
 
@@ -106,7 +103,7 @@ class CategoryController extends Controller
                 message: 'Template category retrieved successfully'
             );
         } catch (\Exception $e) {
-            return $this->error($e->getMessage(), $e->getCode());
+            return $this->error(errors: null, message: $e->getMessage());
         }
     }
 
@@ -148,7 +145,7 @@ class CategoryController extends Controller
             );
         } catch (\Exception $e) {
             DB::rollBack();
-            return $this->error($e->getMessage(), $e->getCode());
+            return $this->error(errors: null, message: $e->getMessage());
         }
     }
 
@@ -179,7 +176,7 @@ class CategoryController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack();
-            return $this->error($e->getMessage(), $e->getCode());
+            return $this->error(errors: null, message: $e->getMessage());
         }
     }
 
@@ -219,7 +216,7 @@ class CategoryController extends Controller
                 message: 'Data source detached from template category successfully'
             );
         } catch (\Exception $e) {
-            return $this->error($e->getMessage(), $e->getCode());
+            return $this->error(errors: null, message: $e->getMessage());
         }
     }
 }

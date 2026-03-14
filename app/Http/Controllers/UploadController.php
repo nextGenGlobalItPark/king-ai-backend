@@ -101,7 +101,7 @@ class UploadController extends Controller
                 status: Response::HTTP_CREATED
             );
         } catch (\Exception $e) {
-            return $this->error($e->getMessage(), $e->getCode());
+            return $this->error(errors: null, message: $e->getMessage());
         }
     }
 

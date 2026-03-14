@@ -33,7 +33,7 @@ class UserController extends Controller
             $users = User::paginate(config('app.pagination_per_page'));
             return $this->success(UserResource::collection($users));
         } catch (\Exception $e) {
-            return $this->error($e->getMessage(), $e->getCode());
+            return $this->error(errors: null, message: $e->getMessage());
         }
     }
 
@@ -43,7 +43,7 @@ class UserController extends Controller
             $user = User::findOrFail($id);
             return $this->success(new UserResource($user));
         } catch (\Exception $e) {
-            return $this->error($e->getMessage(), $e->getCode());
+            return $this->error(errors: null, message: $e->getMessage());
         }
     }
 
@@ -56,7 +56,7 @@ class UserController extends Controller
             return $this->success(new UserResource($user), 'User created successfully', Response::HTTP_CREATED);
         } catch (\Exception $e) {
             DB::rollBack();
-            return $this->error($e->getMessage(), $e->getCode());
+            return $this->error(errors: null, message: $e->getMessage());
         }
     }
 
@@ -78,7 +78,7 @@ class UserController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack();
-            return $this->error($e->getMessage(), $e->getCode());
+            return $this->error(errors: null, message: $e->getMessage());
         }
     }
 
@@ -94,7 +94,7 @@ class UserController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack();
-            return $this->error($e->getMessage(), $e->getCode());
+            return $this->error(errors: null, message: $e->getMessage());
         }
     }
 }

@@ -34,6 +34,11 @@ trait ResponseTrait
      */
     protected function error(mixed $errors = null, string $message = '', int $status = 422): JsonResponse
     {
+        // Guard against invalid HTTP status codes (e.g. from $e->getCode() returning 0)
+        if ($status < 100 || $status > 599) {
+            $status = 422;
+        }
+
         return response()->json([
             'success' => false,
             'data' => null,

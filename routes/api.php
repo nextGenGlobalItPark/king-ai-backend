@@ -61,7 +61,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/{aiFeatureConfig}', [AiFeatureConfigController::class, 'destroy']);
     });
 
-    Route::post('/generate/{feature}', [AiController::class, 'generate']);
+    // AI generation - tighter rate limit (10 per minute per user)
+    Route::middleware('throttle:10,1')->group(function () {
+        Route::post('/generate/{feature}', [AiController::class, 'generate']);
+    });
     Route::get('/status/{jobId}', [AiController::class, 'status']);
 
     Route::post('/upload', [UploadController::class, 'upload']);

@@ -28,10 +28,9 @@ class TemplateEventPushNotification implements ShouldQueue
             'type' => 'template',
             'action' => $event->action,
             'template_id' => $event->template->id,
-            'category_id' => $event->template->template_category_id,
+            'category_ids' => $event->template->templateCategories->pluck('id')->toArray(),
         ];
 
-        // Queue the send job (with delay if needed)
         SendPushNotification::dispatch($title, $body, $data);
     }
 }

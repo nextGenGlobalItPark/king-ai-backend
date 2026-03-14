@@ -4,12 +4,9 @@ namespace App\Services;
 
 use App\Models\AiFeature;
 use App\Models\DataSource;
-use GuzzleHttp\Client;
-use GuzzleHttp\Exception\ClientException;
-use GuzzleHttp\HandlerStack;
-use GuzzleHttp\MessageFormatter;
-use GuzzleHttp\Middleware;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use InvalidArgumentException;
@@ -29,7 +26,7 @@ class AiGenerationService
         $feature = AiFeature::where('name', $featureName)
             ->where('is_active', true)
             ->firstOrFail();
-        Log::debug($feature);
+        Log::debug('Feature resolved', ['feature' => $featureName, 'id' => $feature->id]);
         $dataSourceId = $feature->data_source_id;
         if (!$dataSourceId) {
             throw new InvalidArgumentException("No data source found for vendor.");
@@ -66,51 +63,52 @@ class AiGenerationService
         $authStrategy = $this->authResolver->resolve($config);
         $authHeaderValue = $authStrategy->generateAuthHeader($config);
 
-        // Build request options (redact sensitive for log)
-        $handlerStack = HandlerStack::create();
-
-        $handlerStack->push(Middleware::log(
-            Log::getLogger(),
-            new MessageFormatter(MessageFormatter::DEBUG)
-        ));
-        $client = new Client();
-        $options = [
-            'method' => $config->method,
-            'headers' => [
+        // Build the HTTP request using Laravel's Http facade (testable via Http::fake())
+        $pendingRequest = Http::timeout(120)
+            ->withHeaders([
                 $config->auth_header_key => $authHeaderValue,
                 'Content-Type' => $config->content_type,
-            ],
-            'timeout' => 120,
-        ];
-
-        // Handle body format
-        if ($config->body_format === 'json') {
-            $options['json'] = $serviceParams;
-        } elseif ($config->body_format === 'form-data') {
-            $options['multipart'] = collect($serviceParams)->map(function ($value, $key) {
-                return ['name' => $key, 'contents' => is_array($value) ? json_encode($value) : $value];
-            })->values()->toArray();
-        } else {
-            $options['form_params'] = $serviceParams;
-        }
+            ]);
 
         // Redact for log
-        $logOptions = Arr::except($options, ['headers.Authorization']);
-        if (isset($logOptions['json'])) $logOptions['json'] = Arr::except($logOptions['json'], ['prompt']);  // Example redact
-        Log::debug('Request options (redacted)', ['options' => $logOptions]);
+        Log::debug('Request options (redacted)', [
+            'endpoint' => $config->endpoint,
+            'method' => $config->method,
+            'body_format' => $config->body_format,
+        ]);
 
-        // Send request with rate-limit handling
         try {
-            $response = $client->request($config->method, $config->endpoint, $options);
-        } catch (ClientException $e) {
-            if ($e->getResponse()->getStatusCode() === 429) {
+            if ($config->body_format === 'json') {
+                $response = $pendingRequest->send($config->method, $config->endpoint, [
+                    'json' => $serviceParams,
+                ]);
+            } elseif ($config->body_format === 'form-data') {
+                $multipart = collect($serviceParams)->map(function ($value, $key) {
+                    return ['name' => $key, 'contents' => is_array($value) ? json_encode($value) : $value];
+                })->values()->toArray();
+                $response = $pendingRequest->send($config->method, $config->endpoint, [
+                    'multipart' => $multipart,
+                ]);
+            } else {
+                $response = $pendingRequest->asForm()->send($config->method, $config->endpoint, [
+                    'form_params' => $serviceParams,
+                ]);
+            }
+
+            if ($response->status() === 429) {
                 Log::warning('Rate limit hit; job will retry');
-                throw $e;  // Let job retry
+                throw new RequestException($response);
+            }
+
+            $response->throw(); // Throw on 4xx/5xx
+        } catch (RequestException $e) {
+            if ($e->response?->status() === 429) {
+                Log::warning('Rate limit hit; job will retry');
             }
             throw $e;
         }
 
-        $responseData = json_decode($response->getBody()->getContents(), true);
+        $responseData = $response->json();
 
         Log::debug('Response of API Call ', ['response' => $responseData]);
 
@@ -343,28 +341,33 @@ class AiGenerationService
         $vendorName = $dataSource->name ?? 'unknown';
         Log::debug('Polling task', ['task_id' => $taskId, 'endpoint' => $pollEndpoint, 'vendor' => $vendorName]);
 
-        $client = new Client();
         try {
-            $response = $client->get($pollEndpoint, [
-                'headers' => [
+            $response = Http::timeout(30)
+                ->withHeaders([
                     $config->auth_header_key => $authHeaderValue,
-                ],
-                'timeout' => 30,
-            ]);
-        } catch (ClientException $e) {
-            if ($e->getResponse()->getStatusCode() === 429) {
+                ])
+                ->get($pollEndpoint);
+
+            if ($response->status() === 429) {
                 Log::warning('Rate limit on poll; job will retry', ['vendor' => $vendorName]);
-                throw $e;
+                throw new RequestException($response);
             }
-            Log::error('Polling request failed', ['error' => $e->getMessage(), 'endpoint' => $pollEndpoint]);
+
+            $response->throw();
+        } catch (RequestException $e) {
+            if ($e->response?->status() === 429) {
+                Log::warning('Rate limit on poll; job will retry', ['vendor' => $vendorName]);
+            } else {
+                Log::error('Polling request failed', ['error' => $e->getMessage(), 'endpoint' => $pollEndpoint]);
+            }
             throw $e;
         }
 
-        $data = json_decode($response->getBody()->getContents(), true);
+        $data = $response->json();
         $responseMapping = $this->decodeIfString($config->response_mapping ?? [], 'response_mapping');
 
         Log::debug('Response mapping', ['responseMapping' => $responseMapping]);
-        Log::debug($data);
+        Log::debug('Poll response received', ['task_id' => $taskId]);
 
         return $strategy->parseResponse($data ?? [], $responseMapping);
     }

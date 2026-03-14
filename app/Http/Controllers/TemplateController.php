@@ -26,7 +26,7 @@ class TemplateController extends Controller
     {
         try {
             // ✅ UPDATED: Load templateCategories (many-to-many) instead of templateCategory
-            $query = Template::with(['templateCategories', 'aiFeature', 'dataSource', 'createdBy', 'templateContents'])
+            $query = Template::with(['templateCategories', 'aiFeature', 'dataSource.vendorStatusMapping', 'createdBy', 'templateContents'])
                 ->when($request->has('ai_feature_id'), fn($q) => $q->where('ai_feature_id', $request->ai_feature_id))
                 ->when($request->has('data_source_id'), fn($q) => $q->where('data_source_id', $request->data_source_id))
                 ->when($request->has('created_by'), fn($q) => $q->where('created_by', $request->created_by))
@@ -55,7 +55,7 @@ class TemplateController extends Controller
             return $this->success(TemplateResource::collection($templates), 'Templates retrieved successfully');
         } catch (\Exception $e) {
             return $this->error(
-                errors: $e->getCode(),
+                errors: null,
                 message: $e->getMessage()
             );
         }
@@ -120,7 +120,7 @@ class TemplateController extends Controller
             DB::commit();
 
             // ✅ UPDATED: Load templateCategories and dataSource
-            $template->load(['templateCategories', 'aiFeature', 'dataSource', 'createdBy', 'templateContents']);
+            $template->load(['templateCategories', 'aiFeature', 'dataSource.vendorStatusMapping', 'createdBy', 'templateContents']);
 
             event(new TemplateEvent($template, 'created'));
 
@@ -132,7 +132,7 @@ class TemplateController extends Controller
         } catch (\Exception $e) {
             DB::rollBack();
             return $this->error(
-                errors: $e->getCode(),
+                errors: null,
                 message: $e->getMessage()
             );
         }
@@ -145,12 +145,12 @@ class TemplateController extends Controller
     {
         try {
             // ✅ UPDATED: Load templateCategories and dataSource
-            $template->load(['templateCategories', 'aiFeature', 'dataSource', 'createdBy', 'templateContents']);
+            $template->load(['templateCategories', 'aiFeature', 'dataSource.vendorStatusMapping', 'createdBy', 'templateContents']);
 
             return $this->success(new TemplateResource($template), 'Template retrieved successfully');
         } catch (\Exception $e) {
             return $this->error(
-                errors: $e->getCode(),
+                errors: null,
                 message: $e->getMessage()
             );
         }
@@ -251,7 +251,7 @@ class TemplateController extends Controller
             DB::commit();
 
             // ✅ UPDATED: Load templateCategories and dataSource
-            $template->load(['templateCategories', 'aiFeature', 'dataSource', 'createdBy', 'templateContents']);
+            $template->load(['templateCategories', 'aiFeature', 'dataSource.vendorStatusMapping', 'createdBy', 'templateContents']);
 
             event(new TemplateEvent($template, 'updated'));
 
@@ -259,7 +259,7 @@ class TemplateController extends Controller
         } catch (\Exception $e) {
             DB::rollBack();
             return $this->error(
-                errors: $e->getCode(),
+                errors: null,
                 message: $e->getMessage()
             );
         }
@@ -273,24 +273,25 @@ class TemplateController extends Controller
         try {
             DB::beginTransaction();
 
-            event(new TemplateEvent($template, 'deleted'));
-
             // Delete associated files
             $contents = $template->templateContents;
             foreach ($contents as $content) {
                 if (Storage::disk('public')->exists($content->template_content)) {
                     Storage::disk('public')->delete($content->template_content);
                 }
-                $content->forceDelete();
+                $content->delete();
             }
 
-            // ✅ NEW: Detach all categories before deleting template
+            // Detach all categories before deleting template
             $template->templateCategories()->detach();
 
-            // Delete template
-            $template->forceDelete();
+            // Soft delete template (consistent with SoftDeletes trait)
+            $template->delete();
 
             DB::commit();
+
+            // Fire event AFTER successful commit so notification only sends if delete succeeded
+            event(new TemplateEvent($template, 'deleted'));
 
             return $this->success(
                 data: null,
@@ -300,7 +301,7 @@ class TemplateController extends Controller
         } catch (\Exception $e) {
             DB::rollBack();
             return $this->error(
-                errors: $e->getCode(),
+                errors: null,
                 message: $e->getMessage()
             );
         }
@@ -312,7 +313,7 @@ class TemplateController extends Controller
     public function byCategory(Request $request, $categoryId)
     {
         try {
-            $templates = Template::with(['templateCategories', 'aiFeature', 'dataSource', 'createdBy', 'templateContents'])
+            $templates = Template::with(['templateCategories', 'aiFeature', 'dataSource.vendorStatusMapping', 'createdBy', 'templateContents'])
                 ->whereHas('templateCategories', function($query) use ($categoryId) {
                     $query->where('template_categories.id', $categoryId);
                 })
@@ -324,7 +325,7 @@ class TemplateController extends Controller
             return $this->success(TemplateResource::collection($templates), 'Templates retrieved successfully');
         } catch (\Exception $e) {
             return $this->error(
-                errors: $e->getCode(),
+                errors: null,
                 message: $e->getMessage()
             );
         }
@@ -336,7 +337,7 @@ class TemplateController extends Controller
     public function byCategorySlug(Request $request, $slug)
     {
         try {
-            $templates = Template::with(['templateCategories', 'aiFeature', 'dataSource', 'createdBy', 'templateContents'])
+            $templates = Template::with(['templateCategories', 'aiFeature', 'dataSource.vendorStatusMapping', 'createdBy', 'templateContents'])
                 ->whereHas('templateCategories', function($query) use ($slug) {
                     $query->where('template_category_slug', $slug);
                 })
@@ -348,7 +349,7 @@ class TemplateController extends Controller
             return $this->success(TemplateResource::collection($templates), 'Templates retrieved successfully');
         } catch (\Exception $e) {
             return $this->error(
-                errors: $e->getCode(),
+                errors: null,
                 message: $e->getMessage()
             );
         }
@@ -365,7 +366,7 @@ class TemplateController extends Controller
                 'category_ids.*' => 'integer|exists:template_categories,id',
             ]);
 
-            $templates = Template::with(['templateCategories', 'aiFeature', 'dataSource', 'createdBy', 'templateContents'])
+            $templates = Template::with(['templateCategories', 'aiFeature', 'dataSource.vendorStatusMapping', 'createdBy', 'templateContents'])
                 ->whereHas('templateCategories', function($query) use ($request) {
                     $query->whereIn('template_categories.id', $request->category_ids);
                 })
@@ -378,7 +379,7 @@ class TemplateController extends Controller
             return $this->success(TemplateResource::collection($templates), 'Templates retrieved successfully');
         } catch (\Exception $e) {
             return $this->error(
-                errors: $e->getCode(),
+                errors: null,
                 message: $e->getMessage()
             );
         }

@@ -55,7 +55,19 @@ class TemplateResource extends JsonResource
                     'id' => $this->dataSource->id,
                     'name' => $this->dataSource->name,
                     'url' => $this->dataSource->url,
-                    'vendor_status_mapping' => $this->getVendorStatusMapping($this->dataSource->id),
+                    'vendor_status_mapping' => $this->whenLoaded('dataSource', function () {
+                        // Use eager-loaded relation if available, avoids N+1
+                        if ($this->dataSource->relationLoaded('vendorStatusMapping') && $this->dataSource->vendorStatusMapping) {
+                            $mapping = $this->dataSource->vendorStatusMapping;
+                            return [
+                                'id' => $mapping->id,
+                                'status_mapping' => $mapping->status_mapping,
+                                'created_at' => $mapping->created_at,
+                                'updated_at' => $mapping->updated_at,
+                            ];
+                        }
+                        return null;
+                    }),
                 ];
             }),
 
@@ -131,24 +143,5 @@ class TemplateResource extends JsonResource
 
             return $configData;
         });
-    }
-
-    /**
-     * Get vendor status mapping for a data source
-     */
-    private function getVendorStatusMapping($dataSourceId)
-    {
-        $mapping = \App\Models\VendorStatusMapping::where('data_source_id', $dataSourceId)->first();
-
-        if (!$mapping) {
-            return null;
-        }
-
-        return [
-            'id' => $mapping->id,
-            'status_mapping' => $mapping->status_mapping,
-            'created_at' => $mapping->created_at,
-            'updated_at' => $mapping->updated_at,
-        ];
     }
 }

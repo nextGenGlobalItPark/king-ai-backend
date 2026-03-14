@@ -2,7 +2,6 @@
 
 namespace App\Http\Resources;
 
-use App\Models\VendorStatusMapping;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -125,22 +124,5 @@ class CategoryResource extends JsonResource
                 'updated_at' => $content->updated_at,
             ];
         });
-    }
-
-    /**
-     * Get vendor status mapping for a data source
-     */
-    private function getVendorStatusMapping($dataSourceId)
-    {
-        $mapping = VendorStatusMapping::where('data_source_id', $dataSourceId)->first();
-
-        if (!$mapping) {
-            return null;
-        }
-
-        return [
-            'id' => $mapping->id,
-            'status_mapping' => $mapping->status_mapping,
-        ];
     }
 }

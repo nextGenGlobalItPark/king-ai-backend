@@ -2,11 +2,13 @@
 
 namespace App\Jobs;
 
+use App\Events\AiJobCompletedEvent;
 use App\Models\AiJob;
 use App\Services\AiGenerationService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
@@ -16,13 +18,18 @@ class AiPollingJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public array $backoff = [10, 20, 40];
-    public int $tries = 30;  // ~10-15min max
-    public int $timeout = 600;  // 10min total job timeout
+    // Only use tries for hard failure retries (e.g. exceptions), not for polling loops
+    public int $tries = 3;
+    public int $timeout = 60;
+
     private const MAX_DURATION_MINUTES = 20;
+    private const POLL_INTERVALS = [10, 20, 40, 60]; // Progressive backoff in seconds
 
     public function __construct(public AiJob $aiJob) {}
 
+    /**
+     * @throws RequestException
+     */
     public function handle(AiGenerationService $service): void
     {
         $aiJob = $this->aiJob->fresh();
@@ -55,57 +62,70 @@ class AiPollingJob implements ShouldQueue
                 'progress' => $statusData['progress'] ?? 'N/A',
             ]);
 
-            if ($statusData['status'] === 'completed') {  // Note: Standardized to 'completed'
+            if ($statusData['status'] === 'completed') {
                 $aiJob->update([
                     'status' => 'completed',
                     'result' => $statusData['result'],
                     'progress' => 100.0,
                 ]);
                 Log::info('AI job completed', ['job_id' => $aiJob->id]);
+                event(new AiJobCompletedEvent($aiJob));
                 return;
-            } elseif ($statusData['status'] === 'failed') {
+            }
+
+            if ($statusData['status'] === 'failed') {
                 $aiJob->update([
                     'status' => 'failed',
                     'result' => ['error' => $statusData['error']],
                     'progress' => 0.0,
                 ]);
                 Log::error('AI job failed via poll', ['job_id' => $aiJob->id, 'error' => $statusData['error']]);
+                event(new AiJobCompletedEvent($aiJob));
                 return;
-            } else {
-                // Processing: Update progress if changed
-                $newProgress = $statusData['progress'] ?? null;
-                if ($aiJob->progress != $newProgress) {
-                    $aiJob->update(['progress' => $newProgress]);
-                    Log::info('Progress updated', ['job_id' => $aiJob->id, 'progress' => $newProgress]);
-                }
-
-                // Backoff retry
-                $attemptIndex = min($this->attempts() - 1, count($this->backoff) - 1);
-                $backoffSeconds = $this->backoff[$attemptIndex] ?? 60;
-                $this->release(Carbon::now()->addSeconds($backoffSeconds));
             }
+
+            // Still processing: update progress and re-dispatch a new polling job
+            $newProgress = $statusData['progress'] ?? null;
+            if ($aiJob->progress != $newProgress) {
+                $aiJob->update(['progress' => $newProgress]);
+                Log::info('Progress updated', ['job_id' => $aiJob->id, 'progress' => $newProgress]);
+            }
+
+            // Calculate progressive backoff based on time elapsed
+            $elapsedSeconds = max(0, now()->diffInSeconds($aiJob->created_at));
+            $intervalIndex = max(0, min((int)($elapsedSeconds / 60), count(self::POLL_INTERVALS) - 1));
+            $nextDelay = self::POLL_INTERVALS[$intervalIndex];
+
+            // Dispatch a fresh polling job instead of release() to avoid tries conflict
+            self::dispatch($aiJob)
+                ->delay(now()->addSeconds($nextDelay))
+                ->onQueue('ai_polling');
+
         } catch (\Exception $e) {
-            Log::warning('Polling error (retrying)', [
+            Log::warning('Polling error (will retry)', [
                 'job_id' => $aiJob->id,
                 'attempt' => $this->attempts(),
                 'error' => $e->getMessage(),
             ]);
-            $this->release(now()->addSeconds(10));
+
+            // Let the tries mechanism handle genuine exceptions
+            throw $e;
         }
     }
 
     public function failed(\Throwable $exception): void
     {
         $aiJob = $this->aiJob->fresh();
-        $aiJob->update([
-            'status' => 'failed',
-            'result' => ['error' => 'Polling exhausted: ' . $exception->getMessage()],
-            'progress' => 0.0,
-        ]);
+        if ($aiJob && $aiJob->status === 'processing') {
+            $aiJob->update([
+                'status' => 'failed',
+                'result' => ['error' => 'Polling failed: ' . $exception->getMessage()],
+                'progress' => 0.0,
+            ]);
+        }
 
-        Log::error('AI Polling exhausted', [
-            'job_id' => $aiJob->id,
-            'attempts' => $this->tries,
+        Log::error('AI Polling job failed after retries', [
+            'job_id' => $aiJob->id ?? null,
             'error' => $exception->getMessage(),
         ]);
     }

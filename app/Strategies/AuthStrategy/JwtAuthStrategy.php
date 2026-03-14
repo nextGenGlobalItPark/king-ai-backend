@@ -7,37 +7,35 @@ use App\Models\AiFeatureConfig;
 use Firebase\JWT\JWT;
 use Illuminate\Support\Facades\Log;
 
-class JwtAuthStrategy  implements AuthStrategyInterface
+class JwtAuthStrategy implements AuthStrategyInterface
 {
     public function generateAuthHeader(AiFeatureConfig $config): string
     {
-        // Read Access Key and Secret Key from environment
-        $accessKey = env($config->auth_value_from_env); // KLING_ACCESS_KEY
-        $secretKey = env($config->auth_secret_key_env); // KLING_SECRET_KEY
+        // Use config() helper which works after config:cache (env() returns null after caching)
+        $accessKey = config('vendor-credentials.' . $config->auth_value_from_env);
+        $secretKey = config('vendor-credentials.' . $config->auth_secret_key_env);
 
         if (empty($accessKey) || empty($secretKey)) {
+            $missing = [];
+            if (empty($accessKey)) $missing[] = $config->auth_value_from_env;
+            if (empty($secretKey)) $missing[] = $config->auth_secret_key_env;
             throw new \RuntimeException(
-                "Kling credentials not configured. Missing: " .
-                ($accessKey ? '' : $config->auth_value_from_env) .
-                ($secretKey ? '' : ' or ' . $config->auth_secret_key_env)
+                "JWT credentials not configured. Missing env: " . implode(', ', $missing)
             );
         }
 
-        // Generate JWT token
         $token = $this->encodeJwtToken(
             $accessKey,
             $secretKey,
             $config->jwt_expiry_seconds ?? 1800,
             $config->jwt_nbf_offset_seconds ?? 5
         );
-        Log::debug($token);
 
-        Log::debug('Generated Kling JWT token', [
+        Log::debug('Generated JWT token', [
             'expires_in' => $config->jwt_expiry_seconds,
             'token_preview' => substr($token, 0, 20) . '...'
         ]);
 
-        // Return "Bearer <token>"
         return 'Bearer ' . $token;
     }
 

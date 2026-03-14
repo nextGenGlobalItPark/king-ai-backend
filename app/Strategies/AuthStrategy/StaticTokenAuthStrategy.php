@@ -6,12 +6,12 @@ use App\Contracts\AuthStrategyInterface;
 use App\Models\AiFeatureConfig;
 use Illuminate\Support\Str;
 
-class StaticTokenAuthStrategy  implements AuthStrategyInterface
+class StaticTokenAuthStrategy implements AuthStrategyInterface
 {
     public function generateAuthHeader(AiFeatureConfig $config): string
     {
-        // Read static token from environment
-        $token = env($config->auth_value_from_env);
+        // Use config() helper which works after config:cache (env() returns null after caching)
+        $token = config('vendor-credentials.' . $config->auth_value_from_env);
 
         if (empty($token)) {
             throw new \RuntimeException(
@@ -19,8 +19,6 @@ class StaticTokenAuthStrategy  implements AuthStrategyInterface
             );
         }
 
-        // Return formatted header value
-        // e.g., "Token sk_vidu_xxxx" or "Bearer sk_vidu_xxxx"
         return Str::ucfirst($config->auth_type) . ' ' . $token;
     }
 }

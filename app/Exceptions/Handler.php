@@ -106,7 +106,7 @@ class Handler extends ExceptionHandler
             $message = 'Unauthenticated';
         } elseif ($exception instanceof AccessDeniedHttpException) {
             $status = Response::HTTP_FORBIDDEN;
-            $message = 'Unauthenticated';
+            $message = 'Unauthorized';
         } elseif ($exception instanceof ModelNotFoundException) {
             $status = Response::HTTP_NOT_FOUND;
             $model = $exception->getModel();

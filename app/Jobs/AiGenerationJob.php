@@ -35,7 +35,11 @@ class AiGenerationJob implements ShouldQueue
     {
         $aiJob = null;
         try {
-            Log::debug("AI GenerationJob started", ['job_id' => $this->jobId]);
+            Log::debug("AI GenerationJob started", [
+                'job_id' => $this->jobId,
+                'feature' => $this->feature,
+                'data_source_id' => $this->dataSourceId,
+            ]);
 
             $dataSource = DataSource::find($this->dataSourceId);
             if (!$dataSource) {
@@ -43,8 +47,6 @@ class AiGenerationJob implements ShouldQueue
             }
             $dataSourceId = $dataSource->id;
 
-            Log::debug("AI GenerationJob started", ['job_id' => $this->jobId]);
-            Log::debug($this->feature);
             // Create or update job record
             $aiJob = AiJob::updateOrCreate(
                 ['queue_job_id' => $this->jobId],
@@ -107,7 +109,7 @@ class AiGenerationJob implements ShouldQueue
         }
 
         Log::error('AI Generation job failed after retries', [
-            'queue_job_id' => $this->job->getJobId(),
+            'queue_job_id' => $this->jobId,
             'error' => $exception->getMessage(),
         ]);
     }

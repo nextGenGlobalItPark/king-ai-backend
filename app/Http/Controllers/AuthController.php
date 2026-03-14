@@ -38,7 +38,7 @@ class AuthController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack();
-            return $this->error($e->getMessage(), $e->getCode());
+            return $this->error(errors: null, message: $e->getMessage());
         }
     }
 
@@ -56,7 +56,7 @@ class AuthController extends Controller
             return $this->success(['token' => $token], 'Login successful');
 
         } catch (\Exception $e) {
-            return $this->error($e->getMessage(), $e->getCode());
+            return $this->error(errors: null, message: $e->getMessage());
         }
     }
 
@@ -66,7 +66,7 @@ class AuthController extends Controller
             $request->user()->currentAccessToken()->delete();
             return $this->success(null, 'Logged out successfully');
         } catch (\Exception $e) {
-            return $this->error($e->getMessage(), $e->getCode());
+            return $this->error(errors: null, message: $e->getMessage());
         }
     }
 
@@ -86,7 +86,7 @@ class AuthController extends Controller
             return $this->success(message: 'Device registered successfully', status: Response::HTTP_CREATED);
         } catch (\Exception $e) {
             DB::rollBack();
-            return $this->error(message: $e->getMessage(), status: $e->getCode());
+            return $this->error(errors: null, message: $e->getMessage());
         }
     }
 }

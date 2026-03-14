@@ -28,26 +28,42 @@ class AiFeatureResource extends Resource
     {
         return $form
             ->schema([
-                Forms\Components\Section::make('AI Feature Details')
+                Forms\Components\Section::make('AI feature details')
                     ->schema([
                         Forms\Components\TextInput::make('name')
                             ->label('Name')
                             ->required()
                             ->unique(
                                 ignoreRecord: true,
-                                modifyRuleUsing: fn ($rule) => $rule->whereNull('deleted_at')  // Removed type hint
+                                modifyRuleUsing: fn ($rule) => $rule->whereNull('deleted_at')
                             )
-                            ->maxLength(255),
+                            ->maxLength(255)
+                            ->placeholder('e.g., image2video, text2video, effects'),
                         Forms\Components\Textarea::make('description')
                             ->label('Description')
                             ->rows(3)
                             ->maxLength(65535)
-                            ->columnSpanFull(),
+                            ->columnSpanFull()
+                            ->placeholder('e.g., Generate video from image with optional tail image'),
                         Forms\Components\Toggle::make('is_active')
                             ->label('Active')
                             ->default(true),
                     ])
                     ->columns(1),
+
+                Forms\Components\Section::make('Active vendor')
+                    ->description('Select which vendor (data source) to use when this feature is called. The system will use the AI Feature Config that matches this vendor.')
+                    ->schema([
+                        Forms\Components\Select::make('data_source_id')
+                            ->label('Active data source')
+                            ->relationship('dataSource', 'name')
+                            ->required()
+                            ->searchable()
+                            ->preload()
+                            ->helperText('Determines which vendor config is used for generation. You can switch vendors by changing this without modifying configs.')
+                            ->placeholder('Select a vendor...'),
+                    ]),
+
                 Forms\Components\Section::make('Relations')
                     ->schema([
                         Forms\Components\Select::make('created_by')
@@ -55,8 +71,8 @@ class AiFeatureResource extends Resource
                             ->relationship('createdBy', 'name')
                             ->searchable()
                             ->preload()
-                            ->dehydrated(false)  // Set automatically in mutateFormDataBeforeCreate
-                            ->visible(false),  // Hide if auto-set
+                            ->dehydrated(false)
+                            ->visible(false),
                     ])
                     ->collapsible(),
             ]);
@@ -70,6 +86,12 @@ class AiFeatureResource extends Resource
                     ->label('Name')
                     ->searchable()
                     ->sortable(),
+                Tables\Columns\TextColumn::make('dataSource.name')
+                    ->label('Active vendor')
+                    ->badge()
+                    ->color('warning')
+                    ->placeholder('Not set')
+                    ->sortable(),
                 Tables\Columns\TextColumn::make('description')
                     ->label('Description')
                     ->limit(50)
@@ -81,15 +103,15 @@ class AiFeatureResource extends Resource
                     ->falseIcon('heroicon-o-x-circle')
                     ->sortable(),
                 Tables\Columns\TextColumn::make('configs_count')
-                    ->label('Configs Count')
+                    ->label('Configs')
                     ->counts('configs')
                     ->sortable(),
                 Tables\Columns\TextColumn::make('templates_count')
-                    ->label('Templates Count')
+                    ->label('Templates')
                     ->counts('templates')
                     ->sortable(),
                 Tables\Columns\TextColumn::make('createdBy.name')
-                    ->label('Created By')
+                    ->label('Created by')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\TextColumn::make('created_at')
@@ -142,6 +164,7 @@ class AiFeatureResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery();
+        return parent::getEloquentQuery()
+            ->with('dataSource');
     }
 }
