@@ -5,7 +5,6 @@ namespace App\Services;
 use App\Models\AiFeature;
 use App\Models\DataSource;
 use Illuminate\Http\Client\RequestException;
-use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
@@ -27,10 +26,12 @@ class AiGenerationService
             ->where('is_active', true)
             ->firstOrFail();
         Log::debug('Feature resolved', ['feature' => $featureName, 'id' => $feature->id]);
+
         $dataSourceId = $feature->data_source_id;
         if (!$dataSourceId) {
             throw new InvalidArgumentException("No data source found for vendor.");
         }
+
         $config = $feature->configs()
             ->where('data_source_id', $dataSourceId)
             ->where('is_active', true)
@@ -40,6 +41,7 @@ class AiGenerationService
         // Decode JSON fields
         $standardSchema = $this->decodeIfString($config->standard_schema, 'standard_schema');
         $requestBodyTemplate = $this->decodeIfString($config->request_body_template ?? null, 'request_body_template');
+        $responseMapping = $this->decodeIfString($config->response_mapping ?? [], 'response_mapping');
 
         // Apply defaults from schema
         $inputWithDefaults = $this->applySchemaDefaults($input, $standardSchema);
@@ -63,14 +65,13 @@ class AiGenerationService
         $authStrategy = $this->authResolver->resolve($config);
         $authHeaderValue = $authStrategy->generateAuthHeader($config);
 
-        // Build the HTTP request using Laravel's Http facade (testable via Http::fake())
+        // Build the HTTP request
         $pendingRequest = Http::timeout(120)
             ->withHeaders([
                 $config->auth_header_key => $authHeaderValue,
                 'Content-Type' => $config->content_type,
             ]);
 
-        // Redact for log
         Log::debug('Request options (redacted)', [
             'endpoint' => $config->endpoint,
             'method' => $config->method,
@@ -100,7 +101,7 @@ class AiGenerationService
                 throw new RequestException($response);
             }
 
-            $response->throw(); // Throw on 4xx/5xx
+            $response->throw();
         } catch (RequestException $e) {
             if ($e->response?->status() === 429) {
                 Log::warning('Rate limit hit; job will retry');
@@ -109,25 +110,103 @@ class AiGenerationService
         }
 
         $responseData = $response->json();
+        Log::debug('Generation API response received');
 
-        Log::debug('Response of API Call ', ['response' => $responseData]);
+        // Use structured generation mapping to extract task_id and check for errors
+        $generationConfig = $responseMapping['generation'] ?? $responseMapping;
+        $taskIdPath = $generationConfig['task_id_path'] ?? $responseMapping['task_id'] ?? 'task_id';
 
-        // Extract task_id via mapping
-        $responseMapping = $this->decodeIfString($config->response_mapping ?? [], 'response_mapping');
-        $taskIdPath = $responseMapping['task_id'] ?? 'task_id';
-        Log::debug('Task ID path', ['task_id' => $taskIdPath]);
+        // Check if the generation response itself indicates an error
+        $successCodes = $generationConfig['success_codes'] ?? null;
+        if ($successCodes) {
+            $genErrorCodePath = $generationConfig['error_code_path'] ?? 'code';
+            $responseCode = data_get($responseData, $genErrorCodePath);
+            if ($responseCode !== null && !in_array($responseCode, $successCodes)) {
+                $genErrorMsgPath = $generationConfig['error_message_path'] ?? 'message';
+                $errorMsg = data_get($responseData, $genErrorMsgPath, 'Generation request rejected by vendor');
+                throw new \RuntimeException("[Code: {$responseCode}] {$errorMsg}");
+            }
+        }
+
         $taskId = data_get($responseData, $taskIdPath) ?? $responseData['id'] ?? uniqid('task_');
-        $responseData['task_id'] = $taskId;  // Ensure present
+        $responseData['task_id'] = $taskId;
+
+        Log::debug('Task ID extracted', ['task_id' => $taskId, 'path' => $taskIdPath]);
 
         return $responseData;
     }
 
     /**
-     * Apply default values from schema to input
+     * Poll the status of a generation task.
      *
-     * @param array $input User-provided input
-     * @param array $schema Standard schema definition
-     * @return array Input with defaults applied
+     * Now uses GenericPollStrategy with the full response_mapping config.
+     * The strategy reads url_template, status_path, progress_path, asset paths,
+     * etc. from the mapping — no vendor-specific code needed.
+     */
+    public function pollStatus(string $taskId, int $dataSourceId, string $featureName): array
+    {
+        $feature = AiFeature::where('name', $featureName)->firstOrFail();
+        $config = $feature->configs()
+            ->where('data_source_id', $dataSourceId)
+            ->where('is_active', true)
+            ->firstOrFail();
+
+        // Decode the full response mapping
+        $responseMapping = $this->decodeIfString($config->response_mapping ?? [], 'response_mapping');
+
+        // Use status_check_endpoint if set, fall back to main endpoint
+        $statusCheckEndpoint = $config->status_check_endpoint ?: $config->endpoint;
+        if (empty($statusCheckEndpoint)) {
+            throw new InvalidArgumentException('Neither status_check_endpoint nor endpoint is set; cannot poll.');
+        }
+
+        // Resolve generic strategy with the full mapping
+        $strategy = $this->strategyResolver->resolve($dataSourceId, $responseMapping);
+        $pollEndpoint = $strategy->buildEndpoint($statusCheckEndpoint, $taskId);
+        $pollMethod = $strategy->getPollingMethod();
+
+        $authStrategy = $this->authResolver->resolve($config);
+        $authHeaderValue = $authStrategy->generateAuthHeader($config);
+
+        $dataSource = DataSource::find($dataSourceId);
+        $vendorName = $dataSource->name ?? 'unknown';
+        Log::debug('Polling task', [
+            'task_id' => $taskId,
+            'endpoint' => $pollEndpoint,
+            'method' => $pollMethod,
+            'vendor' => $vendorName,
+        ]);
+
+        try {
+            $response = Http::timeout(30)
+                ->withHeaders([
+                    $config->auth_header_key => $authHeaderValue,
+                ])
+                ->send($pollMethod, $pollEndpoint);
+
+            if ($response->status() === 429) {
+                Log::warning('Rate limit on poll; job will retry', ['vendor' => $vendorName]);
+                throw new RequestException($response);
+            }
+
+            $response->throw();
+        } catch (RequestException $e) {
+            if ($e->response?->status() === 429) {
+                Log::warning('Rate limit on poll; job will retry', ['vendor' => $vendorName]);
+            } else {
+                Log::error('Polling request failed', ['error' => $e->getMessage(), 'endpoint' => $pollEndpoint]);
+            }
+            throw $e;
+        }
+
+        $data = $response->json();
+        Log::debug('Poll response received', ['task_id' => $taskId]);
+
+        return $strategy->parseResponse($data ?? [], $responseMapping);
+    }
+
+    /**
+     * Apply default values from schema to input
      */
     private function applySchemaDefaults(array $input, array $schema): array
     {
@@ -135,15 +214,9 @@ class AiGenerationService
 
         foreach ($schema['fields'] ?? [] as $field) {
             $name = $field['name'];
-
-            // If field has default and not provided by user, apply default
             if (isset($field['default']) && !array_key_exists($name, $result)) {
                 $result[$name] = $field['default'];
-
-                Log::debug('Applied default value', [
-                    'field' => $name,
-                    'default' => $field['default']
-                ]);
+                Log::debug('Applied default value', ['field' => $name, 'default' => $field['default']]);
             }
         }
 
@@ -152,43 +225,31 @@ class AiGenerationService
 
     /**
      * Build request body from template by replacing placeholders
-     *
-     * @param array $template Request body template with {{placeholders}}
-     * @param array $input User input with defaults applied
-     * @param array $schema Standard schema for type information
-     * @return array Final request body
      */
-    private function buildFromTemplate(
-        array $template,
-        array $input,
-        array $schema
-    ): array {
+    private function buildFromTemplate(array $template, array $input, array $schema): array
+    {
         $json = json_encode($template, JSON_PRETTY_PRINT);
 
-        // Build type map from schema
         $typeMap = [];
         foreach ($schema['fields'] ?? [] as $field) {
             $typeMap[$field['name']] = $field['type'] ?? 'string';
         }
 
-        // Replace placeholders with actual values
         foreach ($input as $key => $value) {
             $placeholder = '"{{' . $key . '}}"';
             $type = $typeMap[$key] ?? 'string';
 
-            // Convert to proper JSON representation based on type
             $replacement = match($type) {
                 'integer', 'number' => is_numeric($value) ? (int)$value : 0,
                 'float' => is_numeric($value) ? (float)$value : 0.0,
                 'boolean' => $value ? 'true' : 'false',
                 'array', 'object' => json_encode($value),
-                default => json_encode($value), // string
+                default => json_encode($value),
             };
 
             $json = str_replace($placeholder, $replacement, $json);
         }
 
-        // Remove any remaining placeholders (shouldn't happen if schema is correct)
         if (preg_match('/{{[^}]+}}/', $json)) {
             Log::warning('Template has unreplaced placeholders', ['json' => $json]);
             $json = $this->removeUnusedPlaceholders($json);
@@ -197,10 +258,7 @@ class AiGenerationService
         $result = json_decode($json, true);
 
         if (json_last_error() !== JSON_ERROR_NONE) {
-            Log::error('Failed to parse template result', [
-                'error' => json_last_error_msg(),
-                'json' => $json
-            ]);
+            Log::error('Failed to parse template result', ['error' => json_last_error_msg(), 'json' => $json]);
             throw new InvalidArgumentException('Invalid template result: ' . json_last_error_msg());
         }
 
@@ -209,24 +267,16 @@ class AiGenerationService
 
     /**
      * Remove unused placeholders and clean up JSON structure
-     *
-     * @param string $json JSON string with placeholders
-     * @return string Cleaned JSON string
      */
     private function removeUnusedPlaceholders(string $json): string
     {
-        // Remove lines with unreplaced placeholders
         $lines = explode("\n", $json);
         $cleaned = array_filter($lines, function($line) {
             return !preg_match('/{{[^}]+}}/', $line);
         });
 
         $json = implode("\n", $cleaned);
-
-        // Fix trailing commas
         $json = preg_replace('/,(\s*[}\]])/', '$1', $json);
-
-        // Fix double commas
         $json = preg_replace('/,\s*,/', ',', $json);
 
         return $json;
@@ -234,9 +284,6 @@ class AiGenerationService
 
     /**
      * Build validation rules from schema
-     *
-     * @param array $schema Standard schema definition
-     * @return array Laravel validation rules
      */
     private function buildValidationRules(array $schema): array
     {
@@ -245,7 +292,6 @@ class AiGenerationService
         foreach ($schema['fields'] ?? [] as $field) {
             $name = $field['name'];
 
-            // Skip hidden fields from user input validation
             if (!empty($field['hidden'])) {
                 continue;
             }
@@ -253,7 +299,6 @@ class AiGenerationService
             $required = $field['required'] ?? false;
             $type = $field['type'] ?? 'string';
 
-            // If field has default, it becomes optional
             if (isset($field['default'])) {
                 $required = false;
             }
@@ -281,20 +326,6 @@ class AiGenerationService
     }
 
     /**
-     * Map standard input fields to vendor-specific fields (LEGACY)
-     * Only used when request_body_template is not set
-     */
-    private function mapParams(array $input, array $mapping): array
-    {
-        return collect($mapping)
-            ->filter(fn($serviceKey) => $serviceKey !== null)
-            ->mapWithKeys(fn($serviceKey, $standardKey) => [
-                $serviceKey => $input[$standardKey] ?? '',
-            ])
-            ->toArray();
-    }
-
-    /**
      * Helper to decode JSON string to array if needed.
      */
     private function decodeIfString($value, string $fieldName): array
@@ -313,62 +344,5 @@ class AiGenerationService
         }
 
         return is_array($value) ? $value : [];
-    }
-
-    /**
-     * Poll the status of a generation task.
-     */
-    public function pollStatus(string $taskId, int $dataSourceId, string $featureName): array
-    {
-        $feature = AiFeature::where('name', $featureName)->firstOrFail();
-        $config = $feature->configs()
-            ->where('data_source_id', $dataSourceId)
-            ->where('is_active', true)
-            ->firstOrFail();
-
-        $generateEndpoint = $config->endpoint;
-        if (empty($generateEndpoint)) {
-            throw new InvalidArgumentException('Config endpoint is missing; cannot build poll URL.');
-        }
-
-        $strategy = $this->strategyResolver->resolve($dataSourceId);
-        $pollEndpoint = $strategy->buildEndpoint($generateEndpoint, $taskId);
-
-        $authStrategy = $this->authResolver->resolve($config);
-        $authHeaderValue = $authStrategy->generateAuthHeader($config);
-
-        $dataSource = DataSource::find($dataSourceId);
-        $vendorName = $dataSource->name ?? 'unknown';
-        Log::debug('Polling task', ['task_id' => $taskId, 'endpoint' => $pollEndpoint, 'vendor' => $vendorName]);
-
-        try {
-            $response = Http::timeout(30)
-                ->withHeaders([
-                    $config->auth_header_key => $authHeaderValue,
-                ])
-                ->get($pollEndpoint);
-
-            if ($response->status() === 429) {
-                Log::warning('Rate limit on poll; job will retry', ['vendor' => $vendorName]);
-                throw new RequestException($response);
-            }
-
-            $response->throw();
-        } catch (RequestException $e) {
-            if ($e->response?->status() === 429) {
-                Log::warning('Rate limit on poll; job will retry', ['vendor' => $vendorName]);
-            } else {
-                Log::error('Polling request failed', ['error' => $e->getMessage(), 'endpoint' => $pollEndpoint]);
-            }
-            throw $e;
-        }
-
-        $data = $response->json();
-        $responseMapping = $this->decodeIfString($config->response_mapping ?? [], 'response_mapping');
-
-        Log::debug('Response mapping', ['responseMapping' => $responseMapping]);
-        Log::debug('Poll response received', ['task_id' => $taskId]);
-
-        return $strategy->parseResponse($data ?? [], $responseMapping);
     }
 }

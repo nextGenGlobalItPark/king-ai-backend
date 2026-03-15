@@ -37,7 +37,7 @@ class TemplateResource extends JsonResource
                 });
             }),
 
-            // AI Feature
+            // AI Feature with its configs
             'ai_feature' => $this->whenLoaded('aiFeature', function () {
                 $configs = $this->aiFeature->relationLoaded('configs')
                     ? $this->transformConfigs($this->aiFeature->configs)
@@ -46,28 +46,13 @@ class TemplateResource extends JsonResource
                 return [
                     'id' => $this->aiFeature->id,
                     'name' => $this->aiFeature->name,
+                    // Data source comes from the AI Feature (active vendor selection)
+                    'data_source' => $this->aiFeature->dataSource ? [
+                        'id' => $this->aiFeature->dataSource->id,
+                        'name' => $this->aiFeature->dataSource->name,
+                        'url' => $this->aiFeature->dataSource->url,
+                    ] : null,
                     'configs' => $configs,
-                ];
-            }),
-
-            // Data Source
-            'data_source' => $this->whenLoaded('dataSource', function () {
-                return [
-                    'id' => $this->dataSource->id,
-                    'name' => $this->dataSource->name,
-                    'url' => $this->dataSource->url,
-                    'vendor_status_mapping' => $this->whenLoaded('dataSource', function () {
-                        if ($this->dataSource->relationLoaded('vendorStatusMapping') && $this->dataSource->vendorStatusMapping) {
-                            $mapping = $this->dataSource->vendorStatusMapping;
-                            return [
-                                'id' => $mapping->id,
-                                'status_mapping' => $mapping->status_mapping,
-                                'created_at' => $mapping->created_at,
-                                'updated_at' => $mapping->updated_at,
-                            ];
-                        }
-                        return null;
-                    }),
                 ];
             }),
 
@@ -99,8 +84,6 @@ class TemplateResource extends JsonResource
 
     /**
      * Build a full URL from a storage path.
-     *
-     * Handles both relative paths (templates/abc.jpg) and absolute URLs (https://...).
      */
     public static function buildContentUrl(?string $path): ?string
     {
@@ -108,7 +91,6 @@ class TemplateResource extends JsonResource
             return null;
         }
 
-        // Already a full URL
         if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
             return $path;
         }
@@ -117,40 +99,29 @@ class TemplateResource extends JsonResource
     }
 
     /**
-     * Transform AI Feature Configs
+     * Transform AI Feature Configs — only non-sensitive fields for the client
      */
     private function transformConfigs($configs)
     {
         return $configs->map(function ($config) {
-            $configData = [
+            return [
                 'id' => $config->id,
-                'data_source' => [
+                'data_source' => $config->dataSource ? [
                     'id' => $config->dataSource->id,
                     'name' => $config->dataSource->name,
-                ],
+                ] : null,
                 'endpoint' => $config->endpoint,
                 'status_check_endpoint' => $config->status_check_endpoint,
                 'method' => $config->method,
                 'auth_type' => $config->auth_type,
-                'auth_header_key' => $config->auth_header_key,
-                'auth_value_from_env' => $config->auth_value_from_env,
                 'content_type' => $config->content_type,
                 'body_format' => $config->body_format,
                 'is_active' => $config->is_active,
                 'priority' => $config->priority,
+                'standard_schema' => $config->standard_schema,
+                'request_body_template' => $config->request_body_template,
+                'response_mapping' => $config->response_mapping,
             ];
-
-            $configData['standard_schema'] = $config->standard_schema;
-            $configData['request_body_template'] = $config->request_body_template;
-            $configData['response_mapping'] = $config->response_mapping;
-
-            if ($config->auth_type === 'jwt') {
-                $configData['auth_secret_key_env'] = $config->auth_secret_key_env;
-                $configData['jwt_expiry_seconds'] = $config->jwt_expiry_seconds;
-                $configData['jwt_nbf_offset_seconds'] = $config->jwt_nbf_offset_seconds;
-            }
-
-            return $configData;
         });
     }
 }

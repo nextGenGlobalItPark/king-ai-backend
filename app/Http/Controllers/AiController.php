@@ -60,7 +60,7 @@ class AiController extends Controller
      *   "progress": 0-100,
      *   "result": {
      *     "videos": [
-     *       {"id": "...", "url": "...", "duration": "5.0"}
+     *       {"id": "...", "url": "...", "duration": "5.0", "thumbnail": "..."}
      *     ]
      *   },
      *   "error": null,
@@ -68,10 +68,10 @@ class AiController extends Controller
      *   "updated_at": "..."
      * }
      */
-    public function status(string $queueJobId): JsonResponse
+    public function status(string $jobId): JsonResponse
     {
         try {
-            $job = AiJob::where('queue_job_id', $queueJobId)
+            $job = AiJob::where('queue_job_id', $jobId)
                 ->where('user_id', auth()->id())
                 ->firstOrFail();
 
@@ -92,9 +92,13 @@ class AiController extends Controller
     /**
      * Normalize the job response into a consistent format for all vendors.
      *
-     * The raw result stored in ai_jobs varies by vendor (Kling returns assets/asset_urls,
-     * Vidu returns creations/videos, etc.). This method maps them to a standard structure
-     * so the frontend never needs to know which vendor generated the content.
+     * The GenericPollStrategy already stores a normalized result structure:
+     * {
+     *   "assets": [{"id": "...", "url": "...", "duration": "...", "thumbnail": "..."}],
+     *   "asset_urls": ["..."]
+     * }
+     *
+     * This method maps that to the final frontend-friendly format with clean "videos" array.
      */
     private function normalizeJobResponse(AiJob $job): array
     {
@@ -109,22 +113,19 @@ class AiController extends Controller
             'updated_at' => $job->updated_at,
         ];
 
-        // If not completed/failed, return early — no result to normalize
         if (!in_array($job->status, ['completed', 'failed'])) {
             return $normalized;
         }
 
         $rawResult = $job->result;
 
-        // Handle failed jobs
         if ($job->status === 'failed') {
             $normalized['error'] = $rawResult['error'] ?? 'Unknown error';
             return $normalized;
         }
 
-        // Handle completed jobs — normalize the result
-        // The raw result from poll strategies has: assets[], asset_urls[], and optionally creations[]
-        // We normalize to a standard "videos" array with id, url, duration
+        // The GenericPollStrategy stores assets with id, url, duration, thumbnail
+        // already extracted via configurable paths. Just rename to "videos" for the frontend.
         $assets = $rawResult['assets'] ?? [];
         $videos = [];
 
@@ -135,9 +136,9 @@ class AiController extends Controller
                 'duration' => $asset['duration'] ?? null,
             ];
 
-            // Include thumbnail if present (some vendors provide it)
-            if (isset($asset['thumbnail']) || isset($asset['cover_url'])) {
-                $video['thumbnail'] = $asset['thumbnail'] ?? $asset['cover_url'] ?? null;
+            // Thumbnail is now extracted by GenericPollStrategy using thumbnail_path config
+            if (isset($asset['thumbnail'])) {
+                $video['thumbnail'] = $asset['thumbnail'];
             }
 
             $videos[] = $video;

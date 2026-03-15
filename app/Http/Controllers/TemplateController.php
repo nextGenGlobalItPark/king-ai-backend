@@ -26,7 +26,7 @@ class TemplateController extends Controller
     {
         try {
             // ✅ UPDATED: Load templateCategories (many-to-many) instead of templateCategory
-            $query = Template::with(['templateCategories', 'aiFeature', 'dataSource.vendorStatusMapping', 'createdBy', 'templateContents'])
+            $query = Template::with(['templateCategories', 'aiFeature.dataSource', 'aiFeature.configs.dataSource', 'createdBy', 'templateContents'])
                 ->when($request->has('ai_feature_id'), fn($q) => $q->where('ai_feature_id', $request->ai_feature_id))
                 ->when($request->has('data_source_id'), fn($q) => $q->where('data_source_id', $request->data_source_id))
                 ->when($request->has('created_by'), fn($q) => $q->where('created_by', $request->created_by))
@@ -120,7 +120,7 @@ class TemplateController extends Controller
             DB::commit();
 
             // ✅ UPDATED: Load templateCategories and dataSource
-            $template->load(['templateCategories', 'aiFeature', 'dataSource.vendorStatusMapping', 'createdBy', 'templateContents']);
+            $template->load(['templateCategories', 'aiFeature.dataSource', 'aiFeature.configs.dataSource', 'createdBy', 'templateContents']);
 
             event(new TemplateEvent($template, 'created'));
 
@@ -145,7 +145,7 @@ class TemplateController extends Controller
     {
         try {
             // ✅ UPDATED: Load templateCategories and dataSource
-            $template->load(['templateCategories', 'aiFeature', 'dataSource.vendorStatusMapping', 'createdBy', 'templateContents']);
+            $template->load(['templateCategories', 'aiFeature.dataSource', 'aiFeature.configs.dataSource', 'createdBy', 'templateContents']);
 
             return $this->success(new TemplateResource($template), 'Template retrieved successfully');
         } catch (\Exception $e) {
@@ -251,7 +251,7 @@ class TemplateController extends Controller
             DB::commit();
 
             // ✅ UPDATED: Load templateCategories and dataSource
-            $template->load(['templateCategories', 'aiFeature', 'dataSource.vendorStatusMapping', 'createdBy', 'templateContents']);
+            $template->load(['templateCategories', 'aiFeature.dataSource', 'aiFeature.configs.dataSource', 'createdBy', 'templateContents']);
 
             event(new TemplateEvent($template, 'updated'));
 
@@ -313,7 +313,7 @@ class TemplateController extends Controller
     public function byCategory(Request $request, $categoryId)
     {
         try {
-            $templates = Template::with(['templateCategories', 'aiFeature', 'dataSource.vendorStatusMapping', 'createdBy', 'templateContents'])
+            $templates = Template::with(['templateCategories', 'aiFeature.dataSource', 'aiFeature.configs.dataSource', 'createdBy', 'templateContents'])
                 ->whereHas('templateCategories', function($query) use ($categoryId) {
                     $query->where('template_categories.id', $categoryId);
                 })
@@ -337,7 +337,7 @@ class TemplateController extends Controller
     public function byCategorySlug(Request $request, $slug)
     {
         try {
-            $templates = Template::with(['templateCategories', 'aiFeature', 'dataSource.vendorStatusMapping', 'createdBy', 'templateContents'])
+            $templates = Template::with(['templateCategories', 'aiFeature.dataSource', 'aiFeature.configs.dataSource', 'createdBy', 'templateContents'])
                 ->whereHas('templateCategories', function($query) use ($slug) {
                     $query->where('template_category_slug', $slug);
                 })
@@ -366,7 +366,7 @@ class TemplateController extends Controller
                 'category_ids.*' => 'integer|exists:template_categories,id',
             ]);
 
-            $templates = Template::with(['templateCategories', 'aiFeature', 'dataSource.vendorStatusMapping', 'createdBy', 'templateContents'])
+            $templates = Template::with(['templateCategories', 'aiFeature.dataSource', 'aiFeature.configs.dataSource', 'createdBy', 'templateContents'])
                 ->whereHas('templateCategories', function($query) use ($request) {
                     $query->whereIn('template_categories.id', $request->category_ids);
                 })

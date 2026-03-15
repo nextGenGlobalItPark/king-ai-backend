@@ -66,15 +66,27 @@ class AiFeatureConfigResource extends Resource
                     'external_task_id' => '{{external_task_id}}',
                 ],
                 'response_mapping' => [
-                    'task_id' => 'data.task_id',
-                    'status_path' => 'data.task_status',
-                    'result_path' => 'data.task_result',
-                    'asset_array_path' => 'data.task_result.videos',
-                    'asset_url_path' => 'url',
-                    'asset_id_path' => 'id',
-                    'video_duration_path' => 'duration',
-                    'error_code_path' => 'code',
-                    'error_message_path' => 'data.task_status_msg',
+                    'generation' => [
+                        'task_id_path' => 'data.task_id',
+                        'error_code_path' => 'code',
+                        'error_message_path' => 'message',
+                        'success_codes' => [0],
+                    ],
+                    'polling' => [
+                        'method' => 'GET',
+                        'url_template' => '{status_check_endpoint}/{task_id}',
+                        'status_path' => 'data.task_status',
+                        'progress_path' => null,
+                        'error_code_path' => 'code',
+                        'error_message_path' => 'data.task_status_msg',
+                    ],
+                    'result' => [
+                        'asset_array_path' => 'data.task_result.videos',
+                        'asset_url_path' => 'url',
+                        'asset_id_path' => 'id',
+                        'duration_path' => 'duration',
+                        'thumbnail_path' => null,
+                    ],
                 ],
             ],
             'kling_text2video' => [
@@ -111,15 +123,27 @@ class AiFeatureConfigResource extends Resource
                     'external_task_id' => '{{external_task_id}}',
                 ],
                 'response_mapping' => [
-                    'task_id' => 'data.task_id',
-                    'status_path' => 'data.task_status',
-                    'result_path' => 'data.task_result',
-                    'asset_array_path' => 'data.task_result.videos',
-                    'asset_url_path' => 'url',
-                    'asset_id_path' => 'id',
-                    'video_duration_path' => 'duration',
-                    'error_code_path' => 'code',
-                    'error_message_path' => 'data.task_status_msg',
+                    'generation' => [
+                        'task_id_path' => 'data.task_id',
+                        'error_code_path' => 'code',
+                        'error_message_path' => 'message',
+                        'success_codes' => [0],
+                    ],
+                    'polling' => [
+                        'method' => 'GET',
+                        'url_template' => '{status_check_endpoint}/{task_id}',
+                        'status_path' => 'data.task_status',
+                        'progress_path' => null,
+                        'error_code_path' => 'code',
+                        'error_message_path' => 'data.task_status_msg',
+                    ],
+                    'result' => [
+                        'asset_array_path' => 'data.task_result.videos',
+                        'asset_url_path' => 'url',
+                        'asset_id_path' => 'id',
+                        'duration_path' => 'duration',
+                        'thumbnail_path' => null,
+                    ],
                 ],
             ],
             'kling_effects' => [
@@ -150,15 +174,27 @@ class AiFeatureConfigResource extends Resource
                     'external_task_id' => '{{external_task_id}}',
                 ],
                 'response_mapping' => [
-                    'task_id' => 'data.task_id',
-                    'status_path' => 'data.task_status',
-                    'result_path' => 'data.task_result',
-                    'asset_array_path' => 'data.task_result.videos',
-                    'asset_url_path' => 'url',
-                    'asset_id_path' => 'id',
-                    'video_duration_path' => 'duration',
-                    'error_code_path' => 'code',
-                    'error_message_path' => 'data.task_status_msg',
+                    'generation' => [
+                        'task_id_path' => 'data.task_id',
+                        'error_code_path' => 'code',
+                        'error_message_path' => 'message',
+                        'success_codes' => [0],
+                    ],
+                    'polling' => [
+                        'method' => 'GET',
+                        'url_template' => '{status_check_endpoint}/{task_id}',
+                        'status_path' => 'data.task_status',
+                        'progress_path' => null,
+                        'error_code_path' => 'code',
+                        'error_message_path' => 'data.task_status_msg',
+                    ],
+                    'result' => [
+                        'asset_array_path' => 'data.task_result.videos',
+                        'asset_url_path' => 'url',
+                        'asset_id_path' => 'id',
+                        'duration_path' => 'duration',
+                        'thumbnail_path' => null,
+                    ],
                 ],
             ],
         ];
@@ -461,7 +497,7 @@ class AiFeatureConfigResource extends Resource
                                 'error_code_path' => 'code',
                                 'error_message_path' => 'data.task_status_msg',
                             ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES))
-                            ->helperText('task_id: where to find the task ID in the generation response. status_path: where to find the status in poll responses. asset_array_path: where to find the result assets.')
+                            ->helperText('Three sections: generation (task_id extraction + error checking), polling (URL template + status/progress paths), result (asset extraction paths). Use dot notation for nested fields.')
                             ->formatStateUsing(fn ($state) => self::jsonFormatState($state))
                             ->dehydrateStateUsing(fn ($state) => self::jsonDehydrateState($state)),
                     ])

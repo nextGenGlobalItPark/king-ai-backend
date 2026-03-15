@@ -76,29 +76,10 @@ class TemplateResource extends Resource
                             ->required()
                             ->searchable()
                             ->preload()
-                            ->live()
-                            ->helperText('Select the AI feature this template uses'),
-
-                        Forms\Components\Select::make('data_source_id')
-                            ->label('Data Source')
-                            ->relationship('dataSource', 'name')
-                            ->required()
-                            ->searchable()
-                            ->preload()
-                            ->helperText('Select the vendor/API provider for this template')
-                            ->createOptionForm([
-                                Forms\Components\TextInput::make('name')
-                                    ->required()
-                                    ->maxLength(255)
-                                    ->placeholder('e.g., Kling, Vidu'),
-                                Forms\Components\TextInput::make('url')
-                                    ->url()
-                                    ->maxLength(500)
-                                    ->placeholder('https://api.vendor.com'),
-                            ]),
+                            ->helperText('Select the AI feature this template uses. The vendor/data source is determined by the AI Feature\'s active data source setting.'),
                     ])
-                    ->columns(2)
-                    ->description('Configure which AI feature and data source this template uses'),
+                    ->columns(1)
+                    ->description('The data source (vendor) is configured on the AI Feature, not the template.'),
 
                 Forms\Components\Section::make('Status & Settings')
                     ->schema([
@@ -117,77 +98,6 @@ class TemplateResource extends Resource
                             ->helperText('Test templates are only visible in test environment'),
                     ])
                     ->columns(2),
-
-                // Template content uploads
-                Forms\Components\Section::make('Template Content')
-                    ->description('Upload images, videos, and cover images for this template. These are displayed to users in the mobile app as preview/sample content.')
-                    ->schema([
-                        Forms\Components\Repeater::make('templateContents')
-                            ->relationship()
-                            ->label('')
-                            ->schema([
-                                Forms\Components\Select::make('template_content_type')
-                                    ->label('Type')
-                                    ->options([
-                                        'image' => 'Image',
-                                        'video' => 'Video',
-                                        'cover' => 'Cover',
-                                    ])
-                                    ->required()
-                                    ->default('image'),
-
-                                Forms\Components\FileUpload::make('template_content')
-                                    ->label('File')
-                                    ->disk('public')
-                                    ->directory('templates')
-                                    ->visibility('public')
-                                    ->acceptedFileTypes([
-                                        // Images
-                                        'image/jpeg',
-                                        'image/jpg',
-                                        'image/png',
-                                        'image/gif',
-                                        'image/webp',
-                                        'image/svg+xml',
-                                        // Videos
-                                        'video/mp4',
-                                        'video/mpeg',
-                                        'video/quicktime',
-                                        'video/webm',
-                                        'video/x-msvideo',
-                                        'video/x-ms-wmv',
-                                        'video/x-flv',
-                                        'video/ogg',
-                                        'video/3gpp',
-                                    ])
-                                    ->maxSize(102400) // 100MB
-                                    ->required()
-                                    ->columnSpanFull()
-                                    ->imagePreviewHeight('150')
-                                    ->helperText('Images: jpg, png, gif, webp, svg. Videos: mp4, mov, webm, avi, wmv, ogg. Max 100MB.'),
-
-                                Forms\Components\TextInput::make('text')
-                                    ->label('Caption / Description')
-                                    ->maxLength(255)
-                                    ->placeholder('Optional text description')
-                                    ->columnSpanFull(),
-                            ])
-                            ->columns(2)
-                            ->defaultItems(0)
-                            ->addActionLabel('Add content')
-                            ->reorderable(false)
-                            ->collapsible()
-                            ->itemLabel(function (array $state): ?string {
-                                $type = $state['template_content_type'] ?? 'content';
-                                $text = $state['text'] ?? '';
-                                return ucfirst($type) . ($text ? ": {$text}" : '');
-                            })
-                            ->mutateRelationshipDataBeforeCreateUsing(function (array $data): array {
-                                $data['created_by'] = auth()->id();
-                                return $data;
-                            }),
-                    ])
-                    ->collapsible(),
             ]);
     }
 
@@ -216,25 +126,12 @@ class TemplateResource extends Resource
                     ->badge()
                     ->color('success'),
 
-                Tables\Columns\TextColumn::make('dataSource.name')
-                    ->label('Data Source')
-                    ->searchable()
-                    ->sortable()
-                    ->badge()
-                    ->color('warning'),
-
                 Tables\Columns\TextColumn::make('credit_cost')
                     ->label('Credits')
                     ->numeric()
                     ->sortable()
                     ->badge()
                     ->color('primary'),
-
-                Tables\Columns\TextColumn::make('template_contents_count')
-                    ->label('Content')
-                    ->counts('templateContents')
-                    ->suffix(' files')
-                    ->sortable(),
 
                 Tables\Columns\IconColumn::make('is_active')
                     ->label('Active')
@@ -305,8 +202,6 @@ class TemplateResource extends Resource
                     ->placeholder('All')
                     ->trueLabel('Active Only')
                     ->falseLabel('Inactive Only'),
-
-                Tables\Filters\TrashedFilter::make(),
             ])
             ->actions([
                 Tables\Actions\EditAction::make(),
@@ -328,7 +223,9 @@ class TemplateResource extends Resource
 
     public static function getRelations(): array
     {
-        return [];
+        return [
+            //
+        ];
     }
 
     public static function getPages(): array
@@ -343,6 +240,6 @@ class TemplateResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         return parent::getEloquentQuery()
-            ->with(['templateCategories', 'aiFeature', 'dataSource', 'createdBy', 'templateContents']);
+            ->with(['templateCategories', 'aiFeature', 'dataSource', 'createdBy']);
     }
 }

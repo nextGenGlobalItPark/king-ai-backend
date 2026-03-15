@@ -3,21 +3,23 @@
 namespace App\Services;
 
 use App\Contracts\PollStrategyInterface;
-use App\Models\DataSource;
-use App\Strategies\ViduPollStrategy;
-use App\Strategies\KlingPollStrategy;
-use InvalidArgumentException;
+use App\Strategies\GenericPollStrategy;
 
 class PollStrategyResolver
 {
-    public function resolve(int $dataSourceId): PollStrategyInterface
+    /**
+     * Resolve the poll strategy for a given data source.
+     *
+     * Now always returns GenericPollStrategy — all vendor-specific behavior
+     * is driven by the response_mapping config. No need for KlingPollStrategy,
+     * ViduPollStrategy, or any future vendor-specific classes.
+     *
+     * @param int $dataSourceId
+     * @param array $responseMapping The response_mapping from AiFeatureConfig
+     * @return PollStrategyInterface
+     */
+    public function resolve(int $dataSourceId, array $responseMapping = []): PollStrategyInterface
     {
-        $vendorName = DataSource::findOrFail($dataSourceId)->name;
-
-        return match (strtolower($vendorName)) {
-            'vidu' => new ViduPollStrategy($dataSourceId),
-            'kling' => new KlingPollStrategy($dataSourceId),
-            default => throw new InvalidArgumentException("No poll strategy for vendor: {$vendorName}. Add a strategy or use generic."),
-        };
+        return new GenericPollStrategy($dataSourceId, $responseMapping);
     }
 }

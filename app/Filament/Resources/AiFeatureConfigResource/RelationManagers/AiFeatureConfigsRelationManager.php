@@ -60,15 +60,27 @@ class AiFeatureConfigsRelationManager extends RelationManager
                     'external_task_id' => '{{external_task_id}}',
                 ],
                 'response_mapping' => [
-                    'task_id' => 'data.task_id',
-                    'status_path' => 'data.task_status',
-                    'result_path' => 'data.task_result',
-                    'asset_array_path' => 'data.task_result.videos',
-                    'asset_url_path' => 'url',
-                    'asset_id_path' => 'id',
-                    'video_duration_path' => 'duration',
-                    'error_code_path' => 'code',
-                    'error_message_path' => 'data.task_status_msg',
+                    'generation' => [
+                        'task_id_path' => 'data.task_id',
+                        'error_code_path' => 'code',
+                        'error_message_path' => 'message',
+                        'success_codes' => [0],
+                    ],
+                    'polling' => [
+                        'method' => 'GET',
+                        'url_template' => '{status_check_endpoint}/{task_id}',
+                        'status_path' => 'data.task_status',
+                        'progress_path' => null,
+                        'error_code_path' => 'code',
+                        'error_message_path' => 'data.task_status_msg',
+                    ],
+                    'result' => [
+                        'asset_array_path' => 'data.task_result.videos',
+                        'asset_url_path' => 'url',
+                        'asset_id_path' => 'id',
+                        'duration_path' => 'duration',
+                        'thumbnail_path' => null,
+                    ],
                 ],
             ],
             'kling_text2video' => [
@@ -105,15 +117,27 @@ class AiFeatureConfigsRelationManager extends RelationManager
                     'external_task_id' => '{{external_task_id}}',
                 ],
                 'response_mapping' => [
-                    'task_id' => 'data.task_id',
-                    'status_path' => 'data.task_status',
-                    'result_path' => 'data.task_result',
-                    'asset_array_path' => 'data.task_result.videos',
-                    'asset_url_path' => 'url',
-                    'asset_id_path' => 'id',
-                    'video_duration_path' => 'duration',
-                    'error_code_path' => 'code',
-                    'error_message_path' => 'data.task_status_msg',
+                    'generation' => [
+                        'task_id_path' => 'data.task_id',
+                        'error_code_path' => 'code',
+                        'error_message_path' => 'message',
+                        'success_codes' => [0],
+                    ],
+                    'polling' => [
+                        'method' => 'GET',
+                        'url_template' => '{status_check_endpoint}/{task_id}',
+                        'status_path' => 'data.task_status',
+                        'progress_path' => null,
+                        'error_code_path' => 'code',
+                        'error_message_path' => 'data.task_status_msg',
+                    ],
+                    'result' => [
+                        'asset_array_path' => 'data.task_result.videos',
+                        'asset_url_path' => 'url',
+                        'asset_id_path' => 'id',
+                        'duration_path' => 'duration',
+                        'thumbnail_path' => null,
+                    ],
                 ],
             ],
         ];
@@ -304,7 +328,7 @@ class AiFeatureConfigsRelationManager extends RelationManager
                     ->required()
                     ->rows(10)
                     ->columnSpanFull()
-                    ->helperText('Dot-notation paths to extract data from vendor API response')
+                    ->helperText('Structured mapping with generation, polling, and result sections')
                     ->formatStateUsing(fn ($state) => self::jsonFormatState($state))
                     ->dehydrateStateUsing(fn ($state) => self::jsonDehydrateState($state)),
                 Forms\Components\Toggle::make('is_active')
