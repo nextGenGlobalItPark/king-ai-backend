@@ -96,7 +96,7 @@ class UploadController extends Controller
             $path = $file->storeAs($folder, $filename, 'public');
 
             return $this->success(
-                data: ['path' => $path],
+                data: ['path' => 'storage/'.$path],
                 message: 'File uploaded successfully',
                 status: Response::HTTP_CREATED
             );
