@@ -110,11 +110,13 @@ class AiGenerationService
         }
 
         $responseData = $response->json();
-        Log::debug('Generation API response received');
+        Log::debug('Generation API response received', [
+            'response' => $responseData,
+        ]);
 
         // Use structured generation mapping to extract task_id and check for errors
         $generationConfig = $responseMapping['generation'] ?? $responseMapping;
-        $taskIdPath = $generationConfig['task_id_path'] ?? $responseMapping['task_id'] ?? 'task_id';
+        $taskIdPath = $generationConfig['task_id_path'] ?? $responseMapping['task_id'] ?? null;
 
         // Check if the generation response itself indicates an error
         $successCodes = $generationConfig['success_codes'] ?? null;
@@ -128,10 +130,45 @@ class AiGenerationService
             }
         }
 
-        $taskId = data_get($responseData, $taskIdPath) ?? $responseData['id'] ?? uniqid('task_');
+        // Extract task_id: try configured path first, then common vendor paths
+        $taskId = null;
+        $resolvedPath = null;
+
+        if ($taskIdPath) {
+            $taskId = data_get($responseData, $taskIdPath);
+            $resolvedPath = $taskIdPath;
+        }
+
+        // Fallback: try common vendor task_id locations
+        if ($taskId === null) {
+            $fallbackPaths = ['data.task_id', 'data.id', 'task_id', 'id'];
+            foreach ($fallbackPaths as $path) {
+                $taskId = data_get($responseData, $path);
+                if ($taskId !== null) {
+                    $resolvedPath = $path . ' (fallback)';
+                    Log::warning('task_id_path not configured or returned null, used fallback', [
+                        'configured_path' => $taskIdPath,
+                        'fallback_path' => $path,
+                        'task_id' => $taskId,
+                    ]);
+                    break;
+                }
+            }
+        }
+
+        // Last resort: generate a unique ID (should not happen with proper config)
+        if ($taskId === null) {
+            $taskId = uniqid('task_');
+            Log::error('Could not extract task_id from response — using generated ID. Check response_mapping.generation.task_id_path', [
+                'configured_path' => $taskIdPath,
+                'generated_task_id' => $taskId,
+                'response_keys' => array_keys($responseData),
+            ]);
+        }
+
         $responseData['task_id'] = $taskId;
 
-        Log::debug('Task ID extracted', ['task_id' => $taskId, 'path' => $taskIdPath]);
+        Log::debug('Task ID extracted', ['task_id' => $taskId, 'path' => $resolvedPath]);
 
         return $responseData;
     }
