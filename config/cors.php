@@ -7,15 +7,15 @@ return [
     | Cross-Origin Resource Sharing (CORS) Configuration
     |--------------------------------------------------------------------------
     |
-    | Here you may configure your settings for cross-origin resource sharing
-    | or "CORS". This determines what cross-origin operations may execute
-    | in web browsers. You are free to adjust these settings as needed.
+    | CORS headers are handled entirely by Nginx to avoid duplicate headers.
+    | Laravel's CORS middleware is disabled for API routes.
     |
-    | To learn more: https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS
+    | See Nginx config for: Access-Control-Allow-Origin, Allow-Methods,
+    | Allow-Headers, Allow-Credentials (both OPTIONS preflight and PHP responses).
     |
     */
 
-    'paths' => ['api/*', 'sanctum/csrf-cookie'],
+    'paths' => ['sanctum/csrf-cookie'],
 
     'allowed_methods' => ['*'],
 
