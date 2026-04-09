@@ -8,8 +8,25 @@ use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\TemplateController;
 use App\Http\Controllers\UploadController;
 use App\Http\Controllers\VendorStatusMappingController;
+use App\Http\Controllers\WebhookController;
+use App\Http\Controllers\HistoryController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\UserController;
+
+/*
+|--------------------------------------------------------------------------
+| Vendor Webhook (no auth — called by external AI vendors)
+|--------------------------------------------------------------------------
+|
+| This route receives callbacks from AI vendors (Kling, etc.) when a
+| generation task completes. No Sanctum auth since the vendor server
+| calls it. Security relies on UUID unpredictability + optional
+| webhook_secret signature verification in the controller.
+|
+*/
+Route::post('/webhook/{jobId}', [WebhookController::class, 'handle'])
+    ->middleware('throttle:60,1') // Rate limit: 60 per minute to prevent abuse
+    ->name('webhook.handle');
 
 Route::prefix('auth')->group(function () {
     Route::post('/register', [AuthController::class, 'register']);
@@ -68,6 +85,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/status/{jobId}', [AiController::class, 'status']);
 
     Route::post('/upload', [UploadController::class, 'upload']);
+
+    // Generation history
+    Route::prefix('history')->group(function () {
+        Route::get('/', [HistoryController::class, 'index']);
+        Route::get('/{jobId}', [HistoryController::class, 'show']);
+        Route::get('/{jobId}/download', [HistoryController::class, 'download']);
+        Route::delete('/{jobId}', [HistoryController::class, 'destroy']);
+    });
 
     Route::prefix('task-status')->group(function () {
         Route::get('/', [VendorStatusMappingController::class, 'index']);
