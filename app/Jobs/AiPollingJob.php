@@ -69,7 +69,9 @@ class AiPollingJob implements ShouldQueue
                     'progress' => 100.0,
                 ]);
                 Log::info('AI job completed', ['job_id' => $aiJob->id]);
-                event(new AiJobCompletedEvent($aiJob));
+
+                // Dispatch asset download — it will fire AiJobCompletedEvent after downloading
+                AssetDownloadJob::dispatch($aiJob)->onQueue('ai_polling');
                 return;
             }
 
