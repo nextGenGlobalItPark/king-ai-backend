@@ -34,6 +34,13 @@ RUN pecl install redis \
 # Set memory limit to 256M
 RUN echo "memory_limit=256M" > /usr/local/etc/php/conf.d/memory-limit.ini
 
+# Set upload and POST size limits for large file uploads (video up to 100MB)
+RUN echo "upload_max_filesize=128M\n\
+post_max_size=130M\n\
+max_execution_time=300\n\
+max_input_time=300\n\
+max_file_uploads=20" > /usr/local/etc/php/conf.d/upload-limits.ini
+
 # Get latest Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
