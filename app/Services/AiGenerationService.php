@@ -19,8 +19,13 @@ class AiGenerationService
 
     /**
      * Generate content using the specified AI feature and input.
+     *
+     * @param string $featureName
+     * @param array $input
+     * @param string|null $callbackJobId  If provided, auto-injects the webhook callback URL
+     * @return array
      */
-    public function generate(string $featureName, array $input): array
+    public function generate(string $featureName, array $input, ?string $callbackJobId = null): array
     {
         $feature = AiFeature::where('name', $featureName)
             ->where('is_active', true)
@@ -45,6 +50,13 @@ class AiGenerationService
 
         // Apply defaults from schema
         $inputWithDefaults = $this->applySchemaDefaults($input, $standardSchema);
+
+        // Auto-inject callback URL for callback-mode configs
+        if ($config->completion_mode === 'callback' && $callbackJobId) {
+            $callbackUrl = $this->buildCallbackUrl($callbackJobId);
+            $inputWithDefaults['callback_url'] = $callbackUrl;
+            Log::debug('Callback URL injected', ['callback_url' => $callbackUrl]);
+        }
 
         $rules = $this->buildValidationRules($standardSchema);
         $validator = Validator::make($inputWithDefaults, $rules);
@@ -240,6 +252,17 @@ class AiGenerationService
         Log::debug('Poll response received', ['task_id' => $taskId]);
 
         return $strategy->parseResponse($data ?? [], $responseMapping);
+    }
+
+    /**
+     * Build the callback URL for webhook-mode generation.
+     *
+     * Uses the APP_URL from config so it works correctly in all environments.
+     */
+    private function buildCallbackUrl(string $jobId): string
+    {
+        $baseUrl = rtrim(config('app.url'), '/');
+        return "{$baseUrl}/api/webhook/{$jobId}";
     }
 
     /**

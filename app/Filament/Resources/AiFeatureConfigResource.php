@@ -39,6 +39,7 @@ class AiFeatureConfigResource extends Resource
                 'auth_header_key' => 'Authorization',
                 'content_type' => 'application/json',
                 'body_format' => 'json',
+                'completion_mode' => 'callback',
                 'standard_schema' => [
                     'fields' => [
                         ['name' => 'image', 'type' => 'string', 'required' => true, 'label' => 'Source image URL'],
@@ -98,6 +99,7 @@ class AiFeatureConfigResource extends Resource
                 'auth_header_key' => 'Authorization',
                 'content_type' => 'application/json',
                 'body_format' => 'json',
+                'completion_mode' => 'callback',
                 'standard_schema' => [
                     'fields' => [
                         ['name' => 'prompt', 'type' => 'string', 'required' => true, 'label' => 'Text prompt'],
@@ -155,6 +157,7 @@ class AiFeatureConfigResource extends Resource
                 'auth_header_key' => 'Authorization',
                 'content_type' => 'application/json',
                 'body_format' => 'json',
+                'completion_mode' => 'callback',
                 'standard_schema' => [
                     'fields' => [
                         ['name' => 'image', 'type' => 'string', 'required' => true, 'label' => 'Source image URL'],
@@ -252,6 +255,7 @@ class AiFeatureConfigResource extends Resource
                 $set('auth_header_key', $preset['auth_header_key']);
                 $set('content_type', $preset['content_type']);
                 $set('body_format', $preset['body_format']);
+                $set('completion_mode', $preset['completion_mode'] ?? 'polling');
 
                 // Set JSON fields as pretty-printed strings (textarea expects string)
                 $set('standard_schema', json_encode($preset['standard_schema'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
@@ -503,6 +507,33 @@ class AiFeatureConfigResource extends Resource
                     ])
                     ->collapsible(),
 
+                Forms\Components\Section::make('Completion mode')
+                    ->description('How the system knows when a vendor task is done. Polling checks periodically; Callback waits for the vendor to POST to a webhook URL.')
+                    ->schema([
+                        Forms\Components\Select::make('completion_mode')
+                            ->label('Completion mode')
+                            ->options([
+                                'polling' => 'Polling (default — system polls vendor status endpoint)',
+                                'callback' => 'Callback (vendor sends webhook when done)',
+                            ])
+                            ->default('polling')
+                            ->required()
+                            ->live()
+                            ->helperText('Kling supports callback_url. Vidu requires polling. New vendors: check their API docs.'),
+                        Forms\Components\TextInput::make('webhook_secret')
+                            ->label('Webhook secret (optional)')
+                            ->maxLength(255)
+                            ->visible(fn (Get $get) => $get('completion_mode') === 'callback')
+                            ->helperText('If the vendor signs webhook payloads, enter the shared secret here for signature verification. Leave empty to rely on UUID unpredictability.'),
+                        Forms\Components\Placeholder::make('webhook_url_preview')
+                            ->label('Webhook URL pattern')
+                            ->content(fn () => config('app.url') . '/api/webhook/{job_id}')
+                            ->visible(fn (Get $get) => $get('completion_mode') === 'callback')
+                            ->helperText('This URL is auto-injected into the {{callback_url}} placeholder at generation time. The {job_id} is replaced with the actual UUID.'),
+                    ])
+                    ->columns(2)
+                    ->collapsible(),
+
                 Forms\Components\Section::make('Settings')
                     ->schema([
                         Forms\Components\Toggle::make('is_active')
@@ -560,6 +591,15 @@ class AiFeatureConfigResource extends Resource
                     ->color(fn (string $state): string => match ($state) {
                         'jwt' => 'warning',
                         'static_token' => 'success',
+                        default => 'gray',
+                    })
+                    ->sortable(),
+                Tables\Columns\TextColumn::make('completion_mode')
+                    ->label('Completion')
+                    ->badge()
+                    ->color(fn (string $state): string => match ($state) {
+                        'callback' => 'success',
+                        'polling' => 'info',
                         default => 'gray',
                     })
                     ->sortable(),

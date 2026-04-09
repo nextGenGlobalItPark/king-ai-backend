@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\AiFeature;
 use App\Models\AiJob;
 use App\Models\DataSource;
 use App\Services\AiGenerationService;
@@ -10,7 +11,6 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Log;
 
 class AiGenerationJob implements ShouldQueue
@@ -27,8 +27,10 @@ class AiGenerationJob implements ShouldQueue
         public string $feature,
         public array $input,
         public ?int $userId = null,
-        public ?int $dataSourceId = null,  // Prioritize this over vendor string
-        public string $jobId
+        public ?int $dataSourceId = null,
+        public string $jobId,
+        public ?int $templateId = null,
+        public ?int $creditCost = null,
     ) { }
 
     public function handle(AiGenerationService $service): void
@@ -54,6 +56,8 @@ class AiGenerationJob implements ShouldQueue
                     'task_id' => null,
                     'feature' => $this->feature,
                     'data_source_id' => $dataSourceId,
+                    'template_id' => $this->templateId,
+                    'credit_cost' => $this->creditCost,
                     'input' => $this->input,
                     'user_id' => $this->userId,
                     'status' => 'processing',
@@ -63,18 +67,42 @@ class AiGenerationJob implements ShouldQueue
             $this->aiJobId = $aiJob->id;
             Log::debug('AiJob created/updated', ['ai_job_id' => $aiJob->id]);
 
-            $response = $service->generate($this->feature, $this->input);
+            // Determine completion mode BEFORE generation so we can inject callback URL
+            $completionMode = $this->resolveCompletionMode($this->feature, $dataSourceId);
+
+            // Pass jobId for callback URL injection when in callback mode
+            $callbackJobId = ($completionMode === 'callback') ? $this->jobId : null;
+            $response = $service->generate($this->feature, $this->input, $callbackJobId);
             $taskId = $response['task_id'] ?? $response['id'] ?? uniqid('task_');
 
             $aiJob->update(['task_id' => $taskId]);
             Log::debug('Task ID set', ['task_id' => $taskId]);
 
-            // Dispatch polling job
-            AiPollingJob::dispatch($aiJob)
-                ->delay(now()->addSeconds(10))
-                ->onQueue('ai_polling');
+            if ($completionMode === 'callback') {
+                // Callback mode: vendor will POST to our webhook when done.
+                // Dispatch a safety-net timeout job in case the callback never arrives.
+                $timeoutMinutes = 20;
 
-            Log::info('AI Generation queued for polling', ['job_id' => $aiJob->id, 'task_id' => $taskId]);
+                WebhookTimeoutJob::dispatch($aiJob, $timeoutMinutes)
+                    ->delay(now()->addMinutes($timeoutMinutes))
+                    ->onQueue('ai_polling'); // Reuse the polling queue for timeout checks
+
+                Log::info('AI Generation using callback mode — waiting for vendor webhook', [
+                    'job_id' => $aiJob->id,
+                    'task_id' => $taskId,
+                    'timeout_minutes' => $timeoutMinutes,
+                ]);
+            } else {
+                // Polling mode: dispatch the polling job (existing behavior)
+                AiPollingJob::dispatch($aiJob)
+                    ->delay(now()->addSeconds(10))
+                    ->onQueue('ai_polling');
+
+                Log::info('AI Generation using polling mode', [
+                    'job_id' => $aiJob->id,
+                    'task_id' => $taskId,
+                ]);
+            }
         } catch (\Exception $e) {
             if ($aiJob) {
                 $aiJob->update([
@@ -92,6 +120,37 @@ class AiGenerationJob implements ShouldQueue
             ]);
 
             throw $e;  // Re-throw for retry
+        }
+    }
+
+    /**
+     * Resolve the completion mode from the active feature config.
+     *
+     * Returns 'callback' or 'polling' (default).
+     */
+    private function resolveCompletionMode(string $featureName, int $dataSourceId): string
+    {
+        try {
+            $feature = AiFeature::where('name', $featureName)
+                ->where('is_active', true)
+                ->first();
+
+            if (!$feature) {
+                return 'polling';
+            }
+
+            $config = $feature->configs()
+                ->where('data_source_id', $dataSourceId)
+                ->where('is_active', true)
+                ->orderBy('priority')
+                ->first();
+
+            return $config?->completion_mode ?? 'polling';
+        } catch (\Exception $e) {
+            Log::warning('Failed to resolve completion mode, defaulting to polling', [
+                'error' => $e->getMessage(),
+            ]);
+            return 'polling';
         }
     }
 
