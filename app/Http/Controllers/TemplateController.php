@@ -6,6 +6,7 @@ use App\Events\TemplateEvent;
 use App\Http\Requests\StoreTemplateRequest;
 use App\Http\Requests\UpdateTemplateRequest;
 use App\Http\Resources\TemplateResource;
+use App\Models\AiFeature;
 use App\Models\Template;
 use App\Models\TemplateContent;
 use App\Traits\ResponseTrait;
@@ -25,29 +26,23 @@ class TemplateController extends Controller
     public function index(Request $request)
     {
         try {
-            // ✅ UPDATED: Load templateCategories (many-to-many) instead of templateCategory
             $query = Template::with(['templateCategories', 'aiFeature.dataSource', 'aiFeature.configs.dataSource', 'createdBy', 'templateContents'])
                 ->when($request->has('ai_feature_id'), fn($q) => $q->where('ai_feature_id', $request->ai_feature_id))
                 ->when($request->has('data_source_id'), fn($q) => $q->where('data_source_id', $request->data_source_id))
                 ->when($request->has('created_by'), fn($q) => $q->where('created_by', $request->created_by))
-                // ✅ NEW: Filter by category using many-to-many relationship
                 ->when($request->has('category_id'), function($q) use ($request) {
                     $q->whereHas('templateCategories', function($query) use ($request) {
                         $query->where('template_categories.id', $request->category_id);
                     });
                 })
-                // ✅ NEW: Filter by category slug
                 ->when($request->has('category_slug'), function($q) use ($request) {
                     $q->whereHas('templateCategories', function($query) use ($request) {
                         $query->where('template_category_slug', $request->category_slug);
                     });
                 })
-                // ✅ NEW: Filter by active status
                 ->when($request->has('is_active'), fn($q) => $q->where('is_active', $request->boolean('is_active')))
-                // ✅ NEW: Filter by state (test/live)
                 ->when($request->has('state'), fn($q) => $q->where('state', $request->state));
 
-            // Order by sequence
             $query->orderBy('sequence', 'asc');
 
             $templates = $query->paginate($request->get('per_page', 15));
@@ -69,19 +64,22 @@ class TemplateController extends Controller
         try {
             DB::beginTransaction();
 
-            // ✅ UPDATED: Removed template_category_id, added data_source_id, is_active, state, sequence
+            // Auto-fill data_source_id from ai_feature
+            $dataSourceId = $this->resolveDataSourceId($request->ai_feature_id);
+
             $template = Template::create([
                 'name' => $request->name,
                 'credit_cost' => $request->credit_cost,
                 'ai_feature_id' => $request->ai_feature_id,
-                'data_source_id' => $request->data_source_id,
+                'data_source_id' => $dataSourceId,
+                'metadata' => $request->metadata,
                 'is_active' => $request->get('is_active', true),
                 'state' => $request->get('state', 'test'),
                 'sequence' => $request->get('sequence', 0),
                 'created_by' => auth()->id(),
             ]);
 
-            // ✅ NEW: Attach categories (many-to-many)
+            // Attach categories (many-to-many)
             if ($request->has('category_ids')) {
                 $template->templateCategories()->attach($request->category_ids);
             }
@@ -99,7 +97,6 @@ class TemplateController extends Controller
                         $type = $contentData['type'];
                         $text = $contentData['text'] ?? null;
 
-                        // Generate unique filename
                         $extension = $file->getClientOriginalExtension();
                         $filename = Str::uuid() . '.' . $extension;
                         $path = $file->storeAs('templates', $filename, 'public');
@@ -119,7 +116,6 @@ class TemplateController extends Controller
 
             DB::commit();
 
-            // ✅ UPDATED: Load templateCategories and dataSource
             $template->load(['templateCategories', 'aiFeature.dataSource', 'aiFeature.configs.dataSource', 'createdBy', 'templateContents']);
 
             event(new TemplateEvent($template, 'created'));
@@ -144,7 +140,6 @@ class TemplateController extends Controller
     public function show(Template $template)
     {
         try {
-            // ✅ UPDATED: Load templateCategories and dataSource
             $template->load(['templateCategories', 'aiFeature.dataSource', 'aiFeature.configs.dataSource', 'createdBy', 'templateContents']);
 
             return $this->success(new TemplateResource($template), 'Template retrieved successfully');
@@ -164,20 +159,24 @@ class TemplateController extends Controller
         try {
             DB::beginTransaction();
 
-            // ✅ UPDATED: Removed template_category_id, added data_source_id and other fields
             $updateData = $request->only([
                 'name',
                 'credit_cost',
                 'ai_feature_id',
-                'data_source_id',
+                'metadata',
                 'is_active',
                 'state',
                 'sequence'
             ]);
 
+            // Auto-fill data_source_id if ai_feature_id is being updated
+            if (isset($updateData['ai_feature_id'])) {
+                $updateData['data_source_id'] = $this->resolveDataSourceId($updateData['ai_feature_id']);
+            }
+
             $template->update($updateData);
 
-            // ✅ NEW: Sync categories (many-to-many)
+            // Sync categories (many-to-many)
             if ($request->has('category_ids')) {
                 $template->templateCategories()->sync($request->category_ids);
             }
@@ -190,16 +189,13 @@ class TemplateController extends Controller
                     $contentId = $contentData['id'] ?? null;
 
                     if ($contentId) {
-                        // Existing content
                         $oldContent = TemplateContent::findOrFail($contentId);
 
-                        // Security: Ensure it belongs to this template
                         if ($oldContent->template_id !== $template->id) {
                             throw new \Exception('Content does not belong to this template.', 403);
                         }
 
                         if ($hasFile) {
-                            // Replace file
                             if (Storage::disk('public')->exists($oldContent->template_content)) {
                                 Storage::disk('public')->delete($oldContent->template_content);
                             }
@@ -218,7 +214,6 @@ class TemplateController extends Controller
                                 'text' => $text,
                             ]);
                         } else {
-                            // Update text only
                             $updates = ['text' => $contentData['text'] ?? null];
                             if (isset($contentData['type'])) {
                                 $updates['template_content_type'] = $contentData['type'];
@@ -226,7 +221,6 @@ class TemplateController extends Controller
                             $oldContent->update($updates);
                         }
                     } else {
-                        // New content
                         if ($hasFile) {
                             $file = $request->file($fileKey);
                             $type = $contentData['type'];
@@ -250,7 +244,6 @@ class TemplateController extends Controller
 
             DB::commit();
 
-            // ✅ UPDATED: Load templateCategories and dataSource
             $template->load(['templateCategories', 'aiFeature.dataSource', 'aiFeature.configs.dataSource', 'createdBy', 'templateContents']);
 
             event(new TemplateEvent($template, 'updated'));
@@ -273,7 +266,6 @@ class TemplateController extends Controller
         try {
             DB::beginTransaction();
 
-            // Delete associated files
             $contents = $template->templateContents;
             foreach ($contents as $content) {
                 if (Storage::disk('public')->exists($content->template_content)) {
@@ -282,15 +274,11 @@ class TemplateController extends Controller
                 $content->delete();
             }
 
-            // Detach all categories before deleting template
             $template->templateCategories()->detach();
-
-            // Soft delete template (consistent with SoftDeletes trait)
             $template->delete();
 
             DB::commit();
 
-            // Fire event AFTER successful commit so notification only sends if delete succeeded
             event(new TemplateEvent($template, 'deleted'));
 
             return $this->success(
@@ -308,80 +296,11 @@ class TemplateController extends Controller
     }
 
     /**
-     * ✅ NEW: Get templates by category
+     * Resolve data_source_id from ai_feature.
      */
-    public function byCategory(Request $request, $categoryId)
+    private function resolveDataSourceId(int $aiFeatureId): ?int
     {
-        try {
-            $templates = Template::with(['templateCategories', 'aiFeature.dataSource', 'aiFeature.configs.dataSource', 'createdBy', 'templateContents'])
-                ->whereHas('templateCategories', function($query) use ($categoryId) {
-                    $query->where('template_categories.id', $categoryId);
-                })
-                ->when($request->has('is_active'), fn($q) => $q->where('is_active', $request->boolean('is_active')))
-                ->when($request->has('state'), fn($q) => $q->where('state', $request->state))
-                ->orderBy('sequence', 'asc')
-                ->get();
-
-            return $this->success(TemplateResource::collection($templates), 'Templates retrieved successfully');
-        } catch (\Exception $e) {
-            return $this->error(
-                errors: null,
-                message: $e->getMessage()
-            );
-        }
-    }
-
-    /**
-     * ✅ NEW: Get templates by category slug
-     */
-    public function byCategorySlug(Request $request, $slug)
-    {
-        try {
-            $templates = Template::with(['templateCategories', 'aiFeature.dataSource', 'aiFeature.configs.dataSource', 'createdBy', 'templateContents'])
-                ->whereHas('templateCategories', function($query) use ($slug) {
-                    $query->where('template_category_slug', $slug);
-                })
-                ->when($request->has('is_active'), fn($q) => $q->where('is_active', $request->boolean('is_active')))
-                ->when($request->has('state'), fn($q) => $q->where('state', $request->state))
-                ->orderBy('sequence', 'asc')
-                ->get();
-
-            return $this->success(TemplateResource::collection($templates), 'Templates retrieved successfully');
-        } catch (\Exception $e) {
-            return $this->error(
-                errors: null,
-                message: $e->getMessage()
-            );
-        }
-    }
-
-    /**
-     * ✅ NEW: Get templates by multiple categories
-     */
-    public function byCategories(Request $request)
-    {
-        try {
-            $request->validate([
-                'category_ids' => 'required|array',
-                'category_ids.*' => 'integer|exists:template_categories,id',
-            ]);
-
-            $templates = Template::with(['templateCategories', 'aiFeature.dataSource', 'aiFeature.configs.dataSource', 'createdBy', 'templateContents'])
-                ->whereHas('templateCategories', function($query) use ($request) {
-                    $query->whereIn('template_categories.id', $request->category_ids);
-                })
-                ->when($request->has('is_active'), fn($q) => $q->where('is_active', $request->boolean('is_active')))
-                ->when($request->has('state'), fn($q) => $q->where('state', $request->state))
-                ->orderBy('sequence', 'asc')
-                ->get()
-                ->unique('id'); // Remove duplicates if template is in multiple requested categories
-
-            return $this->success(TemplateResource::collection($templates), 'Templates retrieved successfully');
-        } catch (\Exception $e) {
-            return $this->error(
-                errors: null,
-                message: $e->getMessage()
-            );
-        }
+        $feature = AiFeature::find($aiFeatureId);
+        return $feature?->data_source_id;
     }
 }

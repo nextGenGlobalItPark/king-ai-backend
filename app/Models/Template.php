@@ -13,12 +13,23 @@ class Template extends Model
 
     protected $casts = [
         'is_active' => 'boolean',
+        'metadata' => 'array',
     ];
 
-//    public function templateCategory()
-//    {
-//        return $this->belongsTo(TemplateCategory::class, 'template_category_id');
-//    }
+    /**
+     * Auto-fill data_source_id from the AI feature on save.
+     */
+    protected static function booted(): void
+    {
+        static::saving(function (Template $template) {
+            if ($template->ai_feature_id) {
+                $feature = AiFeature::find($template->ai_feature_id);
+                if ($feature && $feature->data_source_id) {
+                    $template->data_source_id = $feature->data_source_id;
+                }
+            }
+        });
+    }
 
     public function templateCategories()
     {
@@ -29,7 +40,6 @@ class Template extends Model
             'template_category_id'
         )->withTimestamps();
     }
-
 
     public function createdBy()
     {
@@ -44,6 +54,11 @@ class Template extends Model
     public function aiFeature()
     {
         return $this->belongsTo(AiFeature::class, 'ai_feature_id');
+    }
+
+    public function dataSource()
+    {
+        return $this->belongsTo(DataSource::class, 'data_source_id');
     }
 
     /**
@@ -70,9 +85,6 @@ class Template extends Model
         return $query->where('state', 'test');
     }
 
-    /**
-     * Scope a query to search by field
-     */
     public function scopeWhereLike($query, $field, $value)
     {
         $value = str_replace(
@@ -81,10 +93,5 @@ class Template extends Model
             $value
         );
         return $query->where($field, 'like', "%{$value}%");
-    }
-
-    public function dataSource()
-    {
-        return $this->belongsTo(DataSource::class, 'data_source_id');
     }
 }

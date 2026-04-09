@@ -23,6 +23,11 @@ class TemplateResource extends JsonResource
             'state' => $this->state,
             'sequence' => $this->sequence,
 
+            // Metadata — user-facing template details
+            'metadata' => $this->whenNotNull($this->metadata, function () {
+                return $this->resolveMetadata($this->metadata);
+            }),
+
             // Categories - many-to-many relationship
             'categories' => $this->whenLoaded('templateCategories', function () {
                 return $this->templateCategories->map(function ($category) {
@@ -80,6 +85,50 @@ class TemplateResource extends JsonResource
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
         ];
+    }
+
+    /**
+     * Resolve metadata — convert sample_content_index references to actual URLs.
+     *
+     * The admin stores sample_content_index in input fields which points to
+     * a template_contents entry. The API resolves this to the actual URL
+     * so the mobile app gets ready-to-use image URLs.
+     */
+    private function resolveMetadata(?array $metadata): ?array
+    {
+        if (empty($metadata)) {
+            return null;
+        }
+
+        $resolved = $metadata;
+
+        // Resolve preview_video_content_index to URL
+        if (isset($resolved['preview_video_content_index']) && $this->relationLoaded('templateContents')) {
+            $index = $resolved['preview_video_content_index'];
+            $contents = $this->templateContents->values();
+            if (isset($contents[$index])) {
+                $resolved['preview_video_url'] = self::buildContentUrl($contents[$index]->template_content);
+            }
+            unset($resolved['preview_video_content_index']);
+        }
+
+        // Resolve sample_content_index in input fields to URLs
+        if (!empty($resolved['guide']['input_fields']) && $this->relationLoaded('templateContents')) {
+            $contents = $this->templateContents->values();
+
+            foreach ($resolved['guide']['input_fields'] as &$field) {
+                if (isset($field['sample_content_index'])) {
+                    $index = $field['sample_content_index'];
+                    if (isset($contents[$index])) {
+                        $field['sample_image_url'] = self::buildContentUrl($contents[$index]->template_content);
+                    }
+                    unset($field['sample_content_index']);
+                }
+            }
+            unset($field);
+        }
+
+        return $resolved;
     }
 
     /**
