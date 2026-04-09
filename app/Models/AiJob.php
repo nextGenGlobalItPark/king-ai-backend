@@ -14,6 +14,7 @@ class AiJob extends Model
         'input' => 'array',
         'result' => 'array',
         'status' => 'string',
+        'hidden_at' => 'datetime',
     ];
 
     public function user()
@@ -21,13 +22,34 @@ class AiJob extends Model
         return $this->belongsTo(User::class);
     }
 
-    public function dataSource()  // Added
+    public function dataSource()
     {
         return $this->belongsTo(DataSource::class);
     }
 
-    public function aiFeature()  // Added; assumes 'feature' column stores name
+    public function aiFeature()
     {
         return $this->belongsTo(AiFeature::class, 'feature', 'name');
+    }
+
+    public function template()
+    {
+        return $this->belongsTo(Template::class);
+    }
+
+    /**
+     * Scope: only visible (not hidden by user) jobs.
+     */
+    public function scopeVisible($query)
+    {
+        return $query->whereNull('hidden_at');
+    }
+
+    /**
+     * Check if assets have been cleaned up.
+     */
+    public function assetsCleanedUp(): bool
+    {
+        return !empty($this->result['cleaned_up_at']);
     }
 }

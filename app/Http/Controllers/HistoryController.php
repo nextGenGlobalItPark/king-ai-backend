@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Resources\TemplateResource;
 use App\Models\AiJob;
 use App\Traits\ResponseTrait;
 use Illuminate\Http\JsonResponse;
@@ -27,7 +28,8 @@ class HistoryController extends Controller
     public function index(Request $request): JsonResponse
     {
         try {
-            $query = AiJob::where('user_id', auth()->id())
+            $query = AiJob::with(['template.templateContents'])
+                ->where('user_id', auth()->id())
                 ->whereNull('hidden_at')
                 ->orderBy('created_at', 'desc');
 
@@ -72,7 +74,8 @@ class HistoryController extends Controller
     public function show(string $jobId): JsonResponse
     {
         try {
-            $job = AiJob::where('queue_job_id', $jobId)
+            $job = AiJob::with(['template.templateContents'])
+                ->where('queue_job_id', $jobId)
                 ->where('user_id', auth()->id())
                 ->whereNull('hidden_at')
                 ->first();
@@ -209,6 +212,8 @@ class HistoryController extends Controller
             'feature' => $job->feature,
             'status' => $job->status,
             'progress' => $job->progress ?? 0,
+            'credit_cost' => $job->credit_cost,
+            'template' => $job->template ? $this->formatTemplate($job->template) : null,
             'created_at' => $job->created_at,
             'updated_at' => $job->updated_at,
         ];
@@ -254,6 +259,68 @@ class HistoryController extends Controller
         }
 
         return $item;
+    }
+
+    /**
+     * Format template with metadata (resolved URLs) and contents for history response.
+     */
+    private function formatTemplate($template): array
+    {
+        $data = [
+            'id' => $template->id,
+            'name' => $template->name,
+            'credit_cost' => $template->credit_cost,
+        ];
+
+        // Include template contents with full URLs
+        $contents = [];
+        if ($template->relationLoaded('templateContents')) {
+            $contents = $template->templateContents->map(function ($content) {
+                return [
+                    'id' => $content->id,
+                    'type' => $content->template_content_type,
+                    'url' => TemplateResource::buildContentUrl($content->template_content),
+                    'text' => $content->text,
+                ];
+            })->values()->toArray();
+        }
+        $data['template_contents'] = $contents;
+
+        // Include metadata with resolved sample image/preview URLs
+        $metadata = $template->metadata;
+        if (!empty($metadata) && $template->relationLoaded('templateContents')) {
+            $allContents = $template->templateContents->values();
+
+            // Resolve preview_video_content_index → URL
+            if (isset($metadata['preview_video_content_index'])) {
+                $index = $metadata['preview_video_content_index'];
+                if (isset($allContents[$index])) {
+                    $metadata['preview_video_url'] = TemplateResource::buildContentUrl(
+                        $allContents[$index]->template_content
+                    );
+                }
+                unset($metadata['preview_video_content_index']);
+            }
+
+            // Resolve sample_content_index in input fields → URLs
+            if (!empty($metadata['guide']['input_fields'])) {
+                foreach ($metadata['guide']['input_fields'] as &$field) {
+                    if (isset($field['sample_content_index'])) {
+                        $index = $field['sample_content_index'];
+                        if (isset($allContents[$index])) {
+                            $field['sample_image_url'] = TemplateResource::buildContentUrl(
+                                $allContents[$index]->template_content
+                            );
+                        }
+                        unset($field['sample_content_index']);
+                    }
+                }
+                unset($field);
+            }
+        }
+        $data['metadata'] = $metadata;
+
+        return $data;
     }
 
     /**
