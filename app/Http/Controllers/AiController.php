@@ -6,6 +6,7 @@ use App\Jobs\AiGenerationJob;
 use App\Models\AiFeature;
 use App\Models\AiFeatureConfig;
 use App\Models\AiJob;
+use App\Models\Template;
 use App\Traits\ResponseTrait;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -23,7 +24,10 @@ class AiController extends Controller
     public function generate(Request $request, string $feature): JsonResponse
     {
         try {
-            $request->validate(['input' => 'required|array']);
+            $request->validate([
+                'input' => 'required|array',
+                'template_id' => 'nullable|integer|exists:templates,id',
+            ]);
             $input = $request->input('input', []);
 
             $featureObj = AiFeature::with('dataSource')
@@ -32,7 +36,16 @@ class AiController extends Controller
                 ->firstOrFail();
             $dataSourceId = $featureObj->data_source_id;
             $uuid = Str::uuid()->toString();
-            $jobInstance = new AiGenerationJob($feature, $input, auth()->id(), $dataSourceId, $uuid);
+
+            // Resolve template and snapshot its credit cost
+            $templateId = $request->input('template_id');
+            $creditCost = null;
+            if ($templateId) {
+                $template = Template::find($templateId);
+                $creditCost = $template?->credit_cost;
+            }
+
+            $jobInstance = new AiGenerationJob($feature, $input, auth()->id(), $dataSourceId, $uuid, $templateId, $creditCost);
 
             dispatch($jobInstance)->onQueue('ai_generation');
 
