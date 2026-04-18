@@ -2,7 +2,7 @@
 
 return [
     'temporary_file_upload' => [
-        'disk' => 'local',
+        'disk' => 'public',           // Use 'public' disk so temp files land in storage/app/public/livewire-tmp
         'rules' => ['required', 'file', 'max:102400'],  // 100MB
         'directory' => 'livewire-tmp',
         'middleware' => null,

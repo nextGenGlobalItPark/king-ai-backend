@@ -52,8 +52,8 @@ class UploadController extends Controller
         }
 
         $maxSizes = [
-            'image' => 5 * 1024 * 1024,  // 5MB in bytes
-            'cover' => 5 * 1024 * 1024,  // 5MB in bytes
+            'image' => 10 * 1024 * 1024,  // 10MB in bytes
+            'cover' => 10 * 1024 * 1024,  // 10MB in bytes
             'video' => 100 * 1024 * 1024, // 100MB in bytes
         ];
 
