@@ -15,7 +15,6 @@ class AiFeatureConfig extends Model
         'standard_schema' => 'array',
         'request_body_template' => 'array',
         'response_mapping' => 'array',
-        'extra_params' => 'array',
         'is_active' => 'boolean',
     ];
 
