@@ -224,7 +224,7 @@ class HistoryController extends Controller
 
             // Build a clean videos array for the client
             $videos = [];
-            foreach ($assets as $asset) {
+            foreach ($assets as $index => $asset) {
                 $video = [
                     'url' => $asset['url'] ?? null,
                     'thumbnail' => $asset['thumbnail'] ?? null,
@@ -233,9 +233,12 @@ class HistoryController extends Controller
 
                 if ($detailed) {
                     $video['id'] = $asset['id'] ?? null;
-                    // Include download URL for convenience
+                    // Include download URL for convenience.
+                    // We use the foreach $index directly — array_search would do a loose
+                    // comparison across all asset arrays and is both slower and brittle
+                    // (e.g., it returns false for any duplicate-shaped asset).
                     $video['download_url'] = $job->queue_job_id
-                        ? url("/api/history/{$job->queue_job_id}/download?asset=" . array_search($asset, $assets))
+                        ? url("/api/history/{$job->queue_job_id}/download?asset={$index}")
                         : null;
                 }
 

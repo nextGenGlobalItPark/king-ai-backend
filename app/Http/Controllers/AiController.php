@@ -69,7 +69,7 @@ class AiController extends Controller
      * {
      *   "job_id": "uuid",
      *   "feature": "image2video",
-     *   "status": "completed|processing|failed",
+     *   "status": "completed|processing|failed|queued",
      *   "progress": 0-100,
      *   "result": {
      *     "videos": [
@@ -80,13 +80,39 @@ class AiController extends Controller
      *   "created_at": "...",
      *   "updated_at": "..."
      * }
+     *
+     * Race condition note: the client may poll /status the moment after /generate
+     * returns 200, before the queued AiGenerationJob has actually written the
+     * AiJob row. Rather than 404'ing in that window, we return a synthetic
+     * "queued" response so the client keeps polling cleanly.
      */
     public function status(string $jobId): JsonResponse
     {
         try {
             $job = AiJob::where('queue_job_id', $jobId)
                 ->where('user_id', auth()->id())
-                ->firstOrFail();
+                ->first();
+
+            if (!$job) {
+                // Could be: (a) the queue worker hasn't processed AiGenerationJob yet,
+                // or (b) the jobId doesn't exist / belongs to another user. We can't
+                // distinguish without extra bookkeeping, so we return a queued shape.
+                // The client polls; once the row exists, real status takes over.
+                return $this->success(
+                    data: [
+                        'job_id' => $jobId,
+                        'feature' => null,
+                        'status' => 'queued',
+                        'progress' => 0,
+                        'result' => null,
+                        'error' => null,
+                        'created_at' => null,
+                        'updated_at' => null,
+                    ],
+                    message: 'Job is queued',
+                    status: Response::HTTP_OK
+                );
+            }
 
             return $this->success(
                 data: $this->normalizeJobResponse($job),

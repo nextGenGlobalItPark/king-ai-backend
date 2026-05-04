@@ -95,8 +95,14 @@ class UploadController extends Controller
             $filename = Str::uuid() . '.' . strtolower($extension);
             $path = $file->storeAs($folder, $filename, 'public');
 
+            // `path` is preserved in its original 'storage/...' shape for backwards
+            // compatibility with the existing mobile client. `url` is added so new
+            // clients can use an absolute URL directly without prepending APP_URL.
             return $this->success(
-                data: ['path' => 'storage/'.$path],
+                data: [
+                    'path' => 'storage/' . $path,
+                    'url' => Storage::disk('public')->url($path),
+                ],
                 message: 'File uploaded successfully',
                 status: Response::HTTP_CREATED
             );

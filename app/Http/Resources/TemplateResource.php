@@ -23,10 +23,13 @@ class TemplateResource extends JsonResource
             'state' => $this->state,
             'sequence' => $this->sequence,
 
-            // Metadata — user-facing template details
-            'metadata' => $this->whenNotNull($this->metadata, function () {
-                return $this->resolveMetadata($this->metadata);
-            }),
+            // Metadata — user-facing template details.
+            // Note: `whenNotNull($value, $default)` returns $value if non-null else $default —
+            // it does NOT accept a closure. We use `when()` so resolveMetadata() actually runs.
+            'metadata' => $this->when(
+                ! is_null($this->metadata),
+                fn () => $this->resolveMetadata($this->metadata)
+            ),
 
             // Categories - many-to-many relationship
             'categories' => $this->whenLoaded('templateCategories', function () {
