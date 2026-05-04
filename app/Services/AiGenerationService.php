@@ -299,9 +299,9 @@ class AiGenerationService
             $placeholder = '"{{' . $key . '}}"';
             $type = $typeMap[$key] ?? 'string';
 
-            $replacement = match($type) {
-                'integer', 'number' => is_numeric($value) ? (int)$value : 0,
-                'float' => is_numeric($value) ? (float)$value : 0.0,
+            $replacement = match ($type) {
+                'integer' => is_numeric($value) ? (int) $value : 0,
+                'number', 'float' => is_numeric($value) ? (float) $value : 0.0,
                 'boolean' => $value ? 'true' : 'false',
                 'array', 'object' => json_encode($value),
                 default => json_encode($value),

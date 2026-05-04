@@ -44,10 +44,14 @@ class FCMPushService implements PushNotificationServiceInterface
             // Handle failures (e.g., invalid tokens)
             if ($report->hasFailures()) {
                 foreach ($report->failures()->getItems() as $failure) {
-                    $token = $failure->target();
+                    // $failure->target() returns a MessageTarget object in kreait/firebase-php v7+,
+                    // not a raw string. Cast explicitly so logging and the DB comparison both
+                    // see a string consistently across PDO drivers.
+                    $token = (string) $failure->target();
+
                     Log::warning('Invalid FCM token', [
                         'token' => substr($token, 0, 10) . '...',
-                        'error' => $failure->error()?->getMessage()
+                        'error' => $failure->error()?->getMessage(),
                     ]);
 
                     // Update DB: Mark inactive

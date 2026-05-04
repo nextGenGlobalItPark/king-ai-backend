@@ -93,9 +93,13 @@ class AiPollingJob implements ShouldQueue
                 Log::info('Progress updated', ['job_id' => $aiJob->id, 'progress' => $newProgress]);
             }
 
-            // Calculate progressive backoff based on time elapsed
-            $elapsedSeconds = max(0, now()->diffInSeconds($aiJob->created_at));
-            $intervalIndex = max(0, min((int)($elapsedSeconds / 60), count(self::POLL_INTERVALS) - 1));
+            // Calculate progressive backoff based on time elapsed.
+            // Carbon 3 changed diffInSeconds() to return signed values by default —
+            // now()->diffInSeconds($pastDate) returns a NEGATIVE number. Use the
+            // second arg `true` (absolute) so the elapsed seconds are always positive
+            // and the interval index actually advances over time.
+            $elapsedSeconds = (int) now()->diffInSeconds($aiJob->created_at, true);
+            $intervalIndex = max(0, min((int) ($elapsedSeconds / 60), count(self::POLL_INTERVALS) - 1));
             $nextDelay = self::POLL_INTERVALS[$intervalIndex];
 
             // Dispatch a fresh polling job instead of release() to avoid tries conflict
