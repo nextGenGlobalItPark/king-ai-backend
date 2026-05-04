@@ -16,14 +16,24 @@ class UserService
     ) {}
 
     /**
-     * Reusable method to create a user with a hashed plaintext password.
+     * Reusable method to create a user with a hashed plaintext password
+     * AND assign a role (defaulting to 'user').
+     *
      * Used by the public /auth/register flow where the user provides their
-     * own password.
+     * own password — they always get the 'user' role; admin role assignment
+     * is a separate admin-only action via the Filament UI or the admin API.
+     *
+     * @param array $data       name, email, password (plaintext)
+     * @param string $role      role name to assign; defaults to User::ROLE_USER
      */
-    public function createUser(array $data): User
+    public function createUser(array $data, string $role = User::ROLE_USER): User
     {
-        $data['password'] = Hash::make($data['password']);
-        return User::create($data);
+        return DB::transaction(function () use ($data, $role) {
+            $data['password'] = Hash::make($data['password']);
+            $user = User::create($data);
+            $user->assignRole($role);
+            return $user;
+        });
     }
 
     /**
@@ -38,7 +48,9 @@ class UserService
      *   2. Persist the user with must_change_password = true and
      *      email_verified_at = null so the verification flow runs on first
      *      login.
-     *   3. Send TWO emails (separately): the verification code and the
+     *   3. Assign a role (defaulting to 'user'). The admin can override via
+     *      $role to provision another admin.
+     *   4. Send TWO emails (separately): the verification code and the
      *      temp password. Best-effort — failures are logged but do not
      *      block user creation.
      *
@@ -46,9 +58,9 @@ class UserService
      * the plaintext password to the admin once and then forget it; we never
      * store it anywhere.
      */
-    public function createUserWithTemporaryPassword(array $data): array
+    public function createUserWithTemporaryPassword(array $data, string $role = User::ROLE_USER): array
     {
-        return DB::transaction(function () use ($data) {
+        return DB::transaction(function () use ($data, $role) {
             $tempPassword = $this->passwordChange->generateTemporaryPassword();
 
             // The 'password' cast on User hashes the plaintext automatically.
@@ -58,6 +70,8 @@ class UserService
                 'password' => $tempPassword,
                 'must_change_password' => true,
             ]);
+
+            $user->assignRole($role);
 
             $this->dispatchOnboardingEmails($user, $tempPassword);
 

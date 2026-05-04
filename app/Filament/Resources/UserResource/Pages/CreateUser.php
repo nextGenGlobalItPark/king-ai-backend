@@ -3,11 +3,13 @@
 namespace App\Filament\Resources\UserResource\Pages;
 
 use App\Filament\Resources\UserResource;
+use App\Models\User;
 use App\Services\UserService;
 use Filament\Actions;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\CreateRecord;
 use Illuminate\Support\Facades\Log;
+use Spatie\Permission\Models\Role;
 
 /**
  * Admin user creation flow.
@@ -18,6 +20,13 @@ use Illuminate\Support\Facades\Log;
  * adds only the UI concerns: capturing the plaintext temp password
  * and surfacing it once on a persistent success notification so the
  * admin can copy it before navigating away.
+ *
+ * Role handling: the form sends `roles` as an array of role IDs (because
+ * Filament's relationship() select stores IDs). We translate that to the
+ * role NAME that UserService expects, then call assignRole inside the
+ * service. Filament's normal post-create relationship sync would also
+ * work, but since we're already overriding handleRecordCreation we do
+ * it explicitly and atomically inside the same transaction.
  */
 class CreateUser extends CreateRecord
 {
@@ -29,8 +38,18 @@ class CreateUser extends CreateRecord
     protected function handleRecordCreation(array $data): \Illuminate\Database\Eloquent\Model
     {
         try {
+            // Extract role ID(s) from the form. Filament's relationship()
+            // select returns an int (single) or array (multiple); we
+            // configured it as single, so it's an int.
+            $roleId = $data['roles'] ?? null;
+            unset($data['roles']);
+
+            $roleName = $roleId
+                ? (Role::find($roleId)?->name ?? User::ROLE_USER)
+                : User::ROLE_USER;
+
             [$user, $tempPassword] = app(UserService::class)
-                ->createUserWithTemporaryPassword($data);
+                ->createUserWithTemporaryPassword($data, $roleName);
 
             $this->generatedPassword = $tempPassword;
 

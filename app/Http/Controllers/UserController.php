@@ -67,8 +67,13 @@ class UserController extends Controller
     public function store(StoreUserRequest $request): JsonResponse
     {
         try {
+            $data = $request->validated();
+            $role = $data['role'] ?? User::ROLE_USER;
+            unset($data['role']); // not a User column
+
             [$user, $tempPassword] = $this->userService->createUserWithTemporaryPassword(
-                $request->validated()
+                $data,
+                $role
             );
 
             return $this->success(
@@ -118,6 +123,62 @@ class UserController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack();
+            return $this->error(errors: null, message: $e->getMessage());
+        }
+    }
+
+    /**
+     * Replace a user's roles with the supplied list.
+     *
+     * PUT /api/users/{id}/roles
+     * Body: { "roles": ["admin"] }   // or ["user"], or both
+     *
+     * Admin-only (gated at route level by manage-users permission).
+     * Uses syncRoles() so passing an empty array removes all roles —
+     * we explicitly reject that here because a user with no role has
+     * no permissions and can't do anything.
+     */
+    public function updateRoles(Request $request, $id): JsonResponse
+    {
+        try {
+            $request->validate([
+                'roles' => ['required', 'array', 'min:1'],
+                'roles.*' => ['string', \Illuminate\Validation\Rule::in([User::ROLE_ADMIN, User::ROLE_USER])],
+            ]);
+
+            $user = User::findOrFail($id);
+
+            // Defensive: prevent admin from demoting themselves and
+            // accidentally locking out the last admin. We don't enforce
+            // a "must keep at least one admin" invariant here because
+            // it's hard to do correctly under concurrent updates;
+            // instead we just block self-demotion as a sanity rail.
+            if ((int) $id === (int) auth()->id()
+                && ! in_array(User::ROLE_ADMIN, $request->input('roles'), true)
+                && $user->hasRole(User::ROLE_ADMIN)
+            ) {
+                return $this->error(
+                    errors: null,
+                    message: 'You cannot remove the admin role from your own account.',
+                    status: Response::HTTP_FORBIDDEN
+                );
+            }
+
+            $user->syncRoles($request->input('roles'));
+
+            Log::info('Admin updated user roles', [
+                'admin_id' => auth()->id(),
+                'target_user_id' => $user->id,
+                'roles' => $request->input('roles'),
+            ]);
+
+            return $this->success(
+                new UserResource($user->fresh()),
+                'User roles updated.'
+            );
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return $this->error(errors: $e->errors(), message: 'Invalid roles', status: Response::HTTP_UNPROCESSABLE_ENTITY);
+        } catch (\Exception $e) {
             return $this->error(errors: null, message: $e->getMessage());
         }
     }

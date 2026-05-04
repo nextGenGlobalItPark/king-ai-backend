@@ -102,8 +102,16 @@ template_categories                (grouping for templates)
 
 ### Table Details
 
-**users** — Application users with Sanctum token authentication.
-Columns: id, name, email, password, email_verified_at, timestamps, soft_deletes.
+**users** — Application users with Sanctum token authentication, email verification, two-factor authentication, and forced-password-change support.
+Columns: id, name, email, password, email_verified_at, must_change_password, two_factor_secret (encrypted), two_factor_recovery_codes (encrypted JSON), two_factor_confirmed_at, remember_token, timestamps, soft_deletes.
+
+**email_verification_codes** — Active 6-digit codes for email verification. One row per user (unique index on user_id); new requests overwrite the previous code.
+Columns: id, user_id (FK, unique), code (bcrypt-hashed), attempts, expires_at, last_sent_at, timestamps.
+
+**password_reset_codes** — Active 6-digit codes for the forgot-password flow. Same structure as email_verification_codes; separate table so a user can have an active verification code AND an active reset code at the same time.
+Columns: id, user_id (FK, unique), code (bcrypt-hashed), attempts, expires_at, last_sent_at, timestamps.
+
+**roles, permissions, model_has_roles, model_has_permissions, role_has_permissions** — `spatie/laravel-permission` v6 tables. Standard schema. See [Authentication and Authorization](#authentication-and-authorization).
 
 **devices** — FCM device tokens for push notifications.
 Columns: id, user_id (FK), token, type (fcm/apns/onesignal), platform (android/ios), is_active, timestamps. Unique constraint on [user_id, token].
@@ -324,11 +332,124 @@ The `AiGenerationService::generate()` method transforms user input into a vendor
 
 ## Authentication and Authorization
 
-### Client authentication
+The system has two parallel authenticated surfaces — the API (Sanctum) and the Filament admin panel (web sessions) — both backed by the same `User` model and routed through the same gating logic.
 
-The API uses Laravel Sanctum with bearer tokens. Clients register or login to receive a token, then include it in all subsequent requests as `Authorization: Bearer {token}`.
+### Client authentication (API)
 
-The token is generated at login/register and can be revoked at logout. All API routes except auth/register, auth/login, and the webhook endpoint require authentication.
+The API uses Laravel Sanctum with bearer tokens. Clients call `POST /api/auth/login` with email + password and receive a token, then include it in subsequent requests as `Authorization: Bearer {token}`. Tokens are stored hashed in `personal_access_tokens` and can be revoked at logout.
+
+**Public registration does NOT return a token.** `POST /api/auth/register` creates the user with `email_verified_at = null`, sends a 6-digit verification code, and returns 201 with `requires_email_verification: true`. The client must call `POST /api/auth/email/verify` with the code, then call `/auth/login` to obtain a token. This deliberate two-step is enforced to make sure a token is never issued to an unverified email.
+
+### Login flow priority
+
+The login endpoint checks five conditions in strict priority order. The first failure short-circuits and returns its response; lower-priority checks are not reached.
+
+| # | Check | Failure response |
+|---|---|---|
+| 1 | Credentials valid | 401 `Invalid credentials` |
+| 2 | Email verified | 403 `requires_email_verification: true` (auto-resends a fresh code subject to 60s cooldown) |
+| 3 | Must change password | 200 with `change_token` and `requires_password_change: true` |
+| 4 | 2FA enabled | 200 with `challenge_token` and `requires_two_factor: true` |
+| 5 | All passed | 200 with Sanctum bearer `token` |
+
+This ordering prevents enumeration (an attacker can't tell whether a wrong password is for an unverified vs. fully-active account) while still giving the legitimate client an actionable next step.
+
+### Email verification
+
+Six-digit numeric codes (mobile-keypad-friendly). 15-minute expiry, max 5 verification attempts per code (after which the code is invalidated), 60-second cooldown between resends. Codes are bcrypt-hashed in the `email_verification_codes` table; the user submits plaintext and the server compares with `Hash::check`.
+
+`EmailVerificationService` is the single source of truth — it issues codes, enforces cooldowns, verifies submissions, and is called from both the API (`EmailVerificationController`) and the Filament `EmailVerify` page. The API endpoints are `POST /api/auth/email/verify` and `POST /api/auth/email/resend`.
+
+### Forgot password
+
+Same 6-digit code mechanism as verification, but a separate table (`password_reset_codes`) so a user can have both an active verification code and an active reset code simultaneously. `POST /api/auth/password/forgot` issues a code; `POST /api/auth/password/reset` verifies the code and sets the new password.
+
+Resetting the password also clears the `must_change_password` flag if it was set. Reset does NOT issue a Sanctum token — the user must log in afterward, which preserves the 2FA gate. Filament has a `/admin/forgot-password` page wired into the login screen via `PanelsRenderHook::AUTH_LOGIN_FORM_AFTER`.
+
+### Two-factor authentication (TOTP)
+
+Backed by `pragmarx/google2fa` and `bacon/bacon-qr-code`. `TwoFactorService` directly instantiates `new Google2FA()` rather than resolving via the container alias (which previously caused `BindingResolutionException` on fresh deploys).
+
+**Setup:** the user calls `POST /api/two-factor/setup` (or visits `/admin/2fa-settings`); the server generates a TOTP secret, encrypts it with `encrypt()`, and stores it with `two_factor_confirmed_at = null`. The response contains a QR code data URI and the secret. The user scans the QR with an authenticator app and submits a code via `POST /api/two-factor/confirm` to activate. On confirmation, the server sets `two_factor_confirmed_at = now()` and generates 8 single-use recovery codes.
+
+**Recovery code storage:** each 10-character recovery code is bcrypt-hashed; the array of hashes is JSON-encoded; the JSON is encrypted with `encrypt()` and stored in `two_factor_recovery_codes`. An attacker would need both the app key and a successful brute-force against bcrypt to use a stolen code.
+
+**Login challenge:** when login finds a user with `two_factor_confirmed_at` set, it returns a signed, time-limited `challenge_token` instead of a Sanctum token. The client submits `POST /api/two-factor/challenge` with the challenge_token plus either a TOTP code or a recovery code; on success it receives a Sanctum token. Recovery codes are consumed on use (removed from the encrypted blob).
+
+**Availability:** the API endpoints (`/api/two-factor/*`) are open to any authenticated user — both `admin` and `user` roles. The Filament settings/challenge pages require panel access (admin-only). Mobile/web clients must therefore implement their own 2FA setup UI for `user`-role accounts.
+
+### Admin-created users and forced password change
+
+When an admin creates a user (Filament UserResource form or `POST /api/users`), `UserService::createUserWithTemporaryPassword` runs in a DB transaction:
+
+1. Generates a 16-character random temp password
+2. Persists the user with `must_change_password = true` and `email_verified_at = null`
+3. Assigns a role (defaults to `user`; admin can override)
+4. Queues two emails: verification code (`VerifyEmailNotification`) and temp password (`TemporaryPasswordNotification`)
+5. Returns the plaintext temp password to the admin once (Filament persistent toast or API response field) so they can share it out-of-band if needed
+
+On first login, the user is gated through email verification, then forced to change the password (`PasswordChangeController`), which clears the `must_change_password` flag.
+
+### Filament panel auth pipeline
+
+The admin panel runs four authenticated middlewares in strict order:
+
+```
+Authenticate (Filament's own)
+   ↓
+EnsureEmailVerified  ──→  redirect to /admin/email-verify if email_verified_at IS NULL
+   ↓
+EnsureMustChangePassword  ──→  redirect to /admin/change-password if must_change_password = true
+   ↓
+EnsureTwoFactorChallenge  ──→  redirect to /admin/two-factor-challenge if 2FA enabled but not yet challenged this session
+   ↓
+   panel
+```
+
+**Path-based whitelisting:** each middleware identifies its own page (and Livewire's `livewire/update`, `livewire/upload-file` paths so form submissions on gate pages aren't bounced) by URL path, not by route name. Filament's auto-generated route names for pages registered via `pages([])` vary by version and slug format, and matching by name caused redirect loops where a middleware redirected its own page back to itself.
+
+**Cascading prerequisite skip:** each downstream middleware skips itself when an earlier prerequisite is unmet. `EnsureMustChangePassword` no-ops if the user is unverified (lets the email gate redirect first). `EnsureTwoFactorChallenge` no-ops if the user is unverified or still has `must_change_password = true`. Without this, the gates would ping-pong each other — e.g. a user with both unverified email and must_change_password would bounce between `/admin/email-verify` and `/admin/change-password` forever.
+
+The session-level `two_factor_passed` flag is cleared on logout (since `StartSession` + `AuthenticateSession` tear down the whole session), so re-login always re-challenges.
+
+### Authorization — roles and permissions
+
+Authorization is provided by `spatie/laravel-permission` v6. Two roles are seeded:
+
+| Role | Description | How assigned |
+|---|---|---|
+| `admin` | Full access. Has every permission in the system. | Manually via Filament UserResource form, `PUT /api/users/{id}/roles`, or tinker |
+| `user` | API-only. Read access to catalog data; full access to own jobs, history, devices. | Automatically assigned on public registration |
+
+Both roles are registered against both `web` (Filament) and `sanctum` (API) guards so checks behave identically regardless of authentication surface.
+
+**Permission matrix (abridged):**
+
+| Permission | admin | user |
+|---|---|---|
+| `access-admin-panel` | ✓ | |
+| `manage-users`, `manage-templates`, `manage-categories`, `manage-ai-features`, `manage-ai-feature-configs`, `manage-data-sources`, `manage-task-status` | ✓ | |
+| `view-templates`, `view-categories`, `view-ai-features`, `view-ai-feature-configs`, `view-data-sources` | ✓ | ✓ |
+| `generate-content`, `view-own-history`, `manage-own-devices` | ✓ | ✓ |
+| `view-all-history` | ✓ | (reserved — not gating any endpoint today) |
+
+Admin is a strict superset of user — anything a user can do, an admin can also do. The full catalog lives in `database/seeders/RolesAndPermissionsSeeder.php`, which is idempotent: re-running it adds new permissions, re-syncs role mappings, and leaves existing user role assignments untouched.
+
+**Enforcement layers:**
+
+1. **Route middleware** — every authenticated route has `permission:{name}` middleware (e.g. `permission:view-templates`). A failed check throws `Spatie\Permission\Exceptions\UnauthorizedException`, which is rendered to the standard `{success, data, message, errors}` JSON envelope by an exception renderer in `bootstrap/app.php`.
+2. **Filament panel gate** — the `User` model implements `FilamentUser::canAccessPanel()`, returning true only if the user has `access-admin-panel`. Non-admins get a 403 at the panel even with valid credentials.
+3. **Controller-level ownership** — for per-user data (history, status, downloads), controllers scope queries by `auth()->id()`. Even an admin calling `GET /api/history` sees only their own jobs through the API. Cross-user history access is exclusively a Filament feature.
+
+**Existing user backfill** is a manual step — every existing user gets 403 on protected endpoints until they have a role assigned:
+
+```bash
+php artisan tinker
+>>> User::find(1)->assignRole('admin');
+>>> User::whereDoesntHave('roles')->each(fn($u) => $u->assignRole('user'));
+```
+
+After running the seeder or any direct DB role/permission edit, run `php artisan permission:cache-reset` to flush spatie's 24-hour permission cache.
 
 ### Vendor authentication
 
@@ -440,9 +561,11 @@ The push service is registered as a binding in `AppServiceProvider` via `PushNot
 
 ## Admin Panel (Filament)
 
-The Filament 3 admin panel at `/admin` provides full CRUD management:
+The Filament 3 admin panel at `/admin` provides full CRUD management. Access is gated by `User::canAccessPanel()` which requires the `access-admin-panel` permission — non-admin users get a 403 even with valid credentials.
 
-**DataSourceResource** — manage vendor definitions. **AiFeatureResource** — manage feature types and their active vendor. **AiFeatureConfigResource** — the most complex resource, with preset loading for Kling, structured JSON editors for schema/template/mapping, conditional JWT fields, completion mode selector, and webhook URL preview. **TemplateResource** — template management with content uploads (repeater), metadata editor (description, output options, input fields repeater with sample image references, user guide). **TemplateCategoryResource** — category management. **UserResource** — user management. **VendorStatusMappingResource** — vendor status string mapping.
+**DataSourceResource** — manage vendor definitions. **AiFeatureResource** — manage feature types and their active vendor. **AiFeatureConfigResource** — the most complex resource, with preset loading for Kling, structured JSON editors for schema/template/mapping, conditional JWT fields, completion mode selector, and webhook URL preview. **TemplateResource** — template management with content uploads (repeater), metadata editor (description, output options, input fields repeater with sample image references, user guide). **TemplateCategoryResource** — category management. **UserResource** — user management with Role select (single-value via `relationship('roles', 'name')`), Role badge column, role/verified/2FA filters, and row actions for resending verification codes and regenerating temp passwords. **VendorStatusMappingResource** — vendor status string mapping.
+
+**Auth-related custom pages:** `EmailVerify` (`/admin/email-verify`), `ChangePassword` (`/admin/change-password`), `TwoFactorChallenge` (`/admin/two-factor-challenge`), `TwoFactorSettings` (`/admin/2fa-settings`), and `Auth/ForgotPassword` (`/admin/forgot-password`, linked from the login screen via `PanelsRenderHook::AUTH_LOGIN_FORM_AFTER`). The first three are gate destinations for the auth pipeline middlewares; the last two are self-service flows.
 
 The `AiFeatureConfigResource` includes a "Load Preset" action that auto-fills all fields for known vendor configurations (Kling image2video, text2video, effects), including the three-section response mapping and callback completion mode.
 
@@ -452,7 +575,7 @@ The `AiFeatureConfigResource` includes a "Load Preset" action that auto-fills al
 
 ### Controllers
 
-`AuthController` — register, login, logout, device registration. `UserController` — CRUD for users. `CategoryController` — CRUD for template categories with data source attachment. `TemplateController` — CRUD for templates with metadata and content uploads, auto-fills data_source_id from ai_feature. `AiFeatureController` — CRUD for AI features. `AiFeatureConfigController` — type-specific create/update for static token and JWT configs, auth type switching. `AiController` — generation endpoint (queues job) and status endpoint (returns normalized response). `HistoryController` — generation history list/detail/download/hide with template metadata resolution. `UploadController` — file upload with MIME verification and size limits. `VendorStatusMappingController` — CRUD for vendor status mappings. `WebhookController` — receives vendor callbacks, normalizes via GenericPollStrategy, dispatches AssetDownloadJob.
+`AuthController` — register, login, logout, device registration. Login enforces the five-step priority gate (credentials → email verified → must_change_password → 2FA → token). `EmailVerificationController` — `/email/verify` and `/email/resend` for the 6-digit code flow. `PasswordChangeController` — forced password change for admin-created users with temp passwords. `PasswordResetController` — forgot-password flow (issues reset codes, accepts code + new password). `TwoFactorController` — setup, confirm, status, recovery code regeneration, disable, and the unauthenticated challenge endpoint that exchanges challenge_token + code for a Sanctum token. `UserController` — CRUD for users, `updateRoles` for role assignment with self-demotion guard. `CategoryController` — CRUD for template categories with data source attachment. `TemplateController` — CRUD for templates with metadata and content uploads, auto-fills data_source_id from ai_feature. `AiFeatureController` — CRUD for AI features. `AiFeatureConfigController` — type-specific create/update for static token and JWT configs, auth type switching. `AiController` — generation endpoint (queues job) and status endpoint (returns normalized response, scoped to auth()->id()). `HistoryController` — generation history list/detail/download/hide, all scoped to auth()->id(). `UploadController` — file upload with MIME verification and size limits. `VendorStatusMappingController` — CRUD for vendor status mappings. `WebhookController` — receives vendor callbacks, normalizes via GenericPollStrategy, dispatches AssetDownloadJob.
 
 ### Form Requests
 
@@ -484,22 +607,35 @@ app/
 ├── Contracts/                  AuthStrategyInterface, PollStrategyInterface
 ├── Events/                     AiJobCompletedEvent, CategoryEvent, TemplateEvent
 ├── Exceptions/                 Handler (unified API error formatting)
-├── Filament/Resources/         7 Filament resources with Pages/ subdirectories
+├── Filament/
+│   ├── Pages/                  EmailVerify, ChangePassword, TwoFactorChallenge,
+│   │                           TwoFactorSettings, Auth/ForgotPassword
+│   └── Resources/              7 Filament resources with Pages/ and RelationManagers/
 ├── Http/
-│   ├── Controllers/            12 controllers
-│   ├── Requests/               18 form request validators
+│   ├── Controllers/            16 controllers (incl. AuthController, EmailVerificationController,
+│   │                           PasswordChangeController, PasswordResetController,
+│   │                           TwoFactorController, WebhookController)
+│   ├── Middleware/             EnsureEmailVerified, EnsureMustChangePassword,
+│   │                           EnsureTwoFactorChallenge
+│   ├── Requests/               18+ form request validators
 │   └── Resources/              6 API resource transformers
 ├── Jobs/                       AiGenerationJob, AiPollingJob, AssetDownloadJob,
 │                               WebhookTimeoutJob, SendPushNotification
 ├── Listeners/                  AiJobCompletedPushNotification,
 │                               TemplateEventPushNotification,
 │                               CategoryEventPushNotification
-├── Models/                     11 Eloquent models
+├── Models/                     User, AiFeature, AiFeatureConfig, AiJob, DataSource, Device,
+│                               EmailVerificationCode, PasswordResetCode, Template,
+│                               TemplateCategory, TemplateCategoryDataSource, TemplateContent,
+│                               VendorStatusMapping
+├── Notifications/              VerifyEmailNotification, TemporaryPasswordNotification,
+│                               PasswordResetNotification (all ShouldQueue)
 ├── Providers/                  AppServiceProvider, EventServiceProvider,
 │                               Filament/AdminPanelProvider
-├── Services/                   AiGenerationService, AuthStrategyResolver,
-│                               PollStrategyResolver, FCMPushService,
-│                               PushNotificationServiceInterface, UserService
+├── Services/                   AiGenerationService, AuthStrategyResolver, PollStrategyResolver,
+│                               FCMPushService, PushNotificationServiceInterface,
+│                               EmailVerificationService, PasswordChangeService,
+│                               PasswordResetService, TwoFactorService, UserService
 ├── Strategies/
 │   ├── AuthStrategy/           JwtAuthStrategy, StaticTokenAuthStrategy
 │   └── GenericPollStrategy     (single config-driven poll strategy for all vendors)
@@ -510,15 +646,21 @@ config/
 ├── cors.php                    CORS (handled by Nginx, minimal Laravel config)
 ├── firebase.php                Firebase project configuration
 ├── livewire.php                Upload settings (100MB, allowed MIME types)
+├── permission.php              spatie/laravel-permission config (teams=false)
 ├── push.php                    Push notification provider setting
 ├── vendor-credentials.php      Vendor API keys (env variable mapping)
 └── [standard Laravel configs]
 
-database/migrations/             28 migrations in chronological order
-database/seeders/                Admin, DataSource, TemplateCategories, AiFeatures
+database/migrations/             34 migrations in chronological order
+                                 Including 2026_05_04_* batch for 2FA, email verification,
+                                 must_change_password, password reset, and permission tables
+database/seeders/                Admin, DataSource, TemplateCategories, AiFeatures,
+                                 RolesAndPermissionsSeeder
 
 routes/
-├── api.php                     All API routes (auth, CRUD, generation, history, webhook)
+├── api.php                     All API routes (auth, 2FA, email verify, password reset,
+│                               CRUD, generation, history, webhook). Permission middleware
+│                               applied per endpoint group.
 ├── web.php                     Minimal (welcome page)
 └── console.php                 Artisan commands
 

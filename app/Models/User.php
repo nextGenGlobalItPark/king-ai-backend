@@ -3,6 +3,8 @@
 namespace App\Models;
 
 use Database\Factories\UserFactory;
+use Filament\Models\Contracts\FilamentUser;
+use Filament\Panel;
 use Illuminate\Contracts\Auth\MustVerifyEmail as MustVerifyEmailContract;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasOne;
@@ -11,6 +13,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Facades\Hash;
 use Laravel\Sanctum\HasApiTokens;
+use Spatie\Permission\Traits\HasRoles;
 
 /**
  * Note on MustVerifyEmail:
@@ -19,15 +22,31 @@ use Laravel\Sanctum\HasApiTokens;
  * we use across the codebase. We do NOT use Laravel's bundled
  * Notifications\VerifyEmail (link-based) — we ship our own
  * VerifyEmailNotification with a 6-digit code instead.
+ *
+ * Note on FilamentUser:
+ * Implementing this contract lets us gate panel access via the
+ * 'access-admin-panel' permission. The 'user' role does NOT have this
+ * permission, so non-admin users get a 403 if they try to visit /admin
+ * even though they have a valid sanctum token / session.
+ *
+ * Note on HasRoles:
+ * Provides hasRole(), hasPermissionTo(), assignRole(), syncRoles(), etc.
+ * Roles are registered against multiple guards in RolesAndPermissionsSeeder
+ * so checks work whether the request authenticated via web (Filament) or
+ * sanctum (API).
  */
-class User extends Authenticatable implements MustVerifyEmailContract
+class User extends Authenticatable implements FilamentUser, MustVerifyEmailContract
 {
     /** @use HasFactory<UserFactory> */
-    use HasFactory, Notifiable, HasApiTokens, SoftDeletes;
+    use HasFactory, Notifiable, HasApiTokens, SoftDeletes, HasRoles;
 
     public const NAME_MAX_LENGTH = 255;
     public const EMAIL_MAX_LENGTH = 255;
     public const PASSWORD_MIN_LENGTH = 8;
+
+    /** Canonical role names. Use these constants in code instead of literals. */
+    public const ROLE_ADMIN = 'admin';
+    public const ROLE_USER = 'user';
 
     protected $fillable = [
         'name',
@@ -61,6 +80,26 @@ class User extends Authenticatable implements MustVerifyEmailContract
             // mixing the 'encrypted' cast with manual encrypt() calls causes
             // double-encryption bugs.
         ];
+    }
+
+    /**
+     * Filament panel access gate. Returns true only for users with the
+     * 'access-admin-panel' permission, which is granted to the admin role
+     * but NOT the user role. Non-admin users get a 403 at the panel.
+     */
+    public function canAccessPanel(Panel $panel): bool
+    {
+        return $this->hasPermissionTo('access-admin-panel');
+    }
+
+    /**
+     * Convenience: is this user an admin? Checks role membership rather
+     * than individual permission so it stays meaningful if 'access-admin-
+     * panel' is later granted to additional roles.
+     */
+    public function isAdmin(): bool
+    {
+        return $this->hasRole(self::ROLE_ADMIN);
     }
 
     /**
@@ -125,3 +164,4 @@ class User extends Authenticatable implements MustVerifyEmailContract
         return false;
     }
 }
+

@@ -27,14 +27,14 @@ class UserResource extends Resource
 
     /**
      * Form layout notes:
-     * - On CREATE: admins enter only name + email. Password is generated
+     * - On CREATE: admins enter only name + email + role. Password is generated
      *   automatically by CreateUser (PasswordChangeService) and emailed to
      *   the user; the user is forced to change it on first login. The
      *   plaintext password is also displayed once on the success
      *   notification so the admin can pass it along out-of-band.
      *   `must_change_password` is set true and `email_verified_at` is left
      *   null so the verification flow runs.
-     * - On EDIT: name + email are editable. Password and verification
+     * - On EDIT: name + email + roles are editable. Password and verification
      *   state are NOT editable from this form — admins can resend the
      *   verification email via the row action below; password resets are
      *   intentionally not exposed here yet (would be a separate feature).
@@ -53,6 +53,26 @@ class UserResource extends Resource
                             ->required()
                             ->maxLength(255)
                             ->unique(ignoreRecord: true),
+
+                        // Role assignment. Uses Filament's relationship()
+                        // helper so the BelongsToMany pivot is handled
+                        // automatically. We use `->relationship('roles', 'name')`
+                        // which displays the Role.name and stores Role.id in
+                        // model_has_roles. On SAVE, Filament's RelationshipsRepository
+                        // calls syncRoles equivalent under the hood.
+                        //
+                        // Single-value (not multiple) because a user has
+                        // exactly one role in this app's design. If you ever
+                        // want multi-role users, change this to ->multiple().
+                        Forms\Components\Select::make('roles')
+                            ->label('Role')
+                            ->relationship('roles', 'name', fn ($query) => $query->where('guard_name', 'web'))
+                            ->preload()
+                            ->required()
+                            ->default(fn () => \Spatie\Permission\Models\Role::where('name', User::ROLE_USER)
+                                ->where('guard_name', 'web')
+                                ->value('id'))
+                            ->helperText('Admin: full panel + API access. User: API only, own resources.'),
                     ])
                     ->columns(2),
             ]);
@@ -67,6 +87,14 @@ class UserResource extends Resource
                     ->sortable(),
                 Tables\Columns\TextColumn::make('email')
                     ->searchable()
+                    ->sortable(),
+                Tables\Columns\TextColumn::make('roles.name')
+                    ->label('Role')
+                    ->badge()
+                    ->colors([
+                        'danger' => User::ROLE_ADMIN,
+                        'gray' => User::ROLE_USER,
+                    ])
                     ->sortable(),
                 Tables\Columns\IconColumn::make('email_verified_at')
                     ->label('Verified')
@@ -109,6 +137,10 @@ class UserResource extends Resource
             ])
             ->filters([
                 Tables\Filters\TrashedFilter::make(),
+                Tables\Filters\SelectFilter::make('role')
+                    ->label('Role')
+                    ->relationship('roles', 'name', fn ($query) => $query->where('guard_name', 'web'))
+                    ->preload(),
                 Tables\Filters\Filter::make('verified')
                     ->query(fn (Builder $query): Builder => $query->whereNotNull('email_verified_at')),
                 Tables\Filters\Filter::make('unverified')

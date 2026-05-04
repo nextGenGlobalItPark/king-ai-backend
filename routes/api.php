@@ -127,69 +127,167 @@ Route::prefix('two-factor')->group(function () {
 });
 
 Route::middleware('auth:sanctum')->group(function () {
-    Route::get('/users', [UserController::class, 'index']);
-    Route::get('/users/{id}', [UserController::class, 'show']);
-    Route::post('/users', [UserController::class, 'store']);
-    Route::put('/users/{id}', [UserController::class, 'update']);
-    Route::delete('/users/{id}', [UserController::class, 'destroy']);
-
-    Route::post('register-device', [AuthController::class, 'registerDevice']);
-
-    Route::prefix('categories')->group(function () {
-        Route::get('/', [CategoryController::class, 'index']);
-        Route::post('/', [CategoryController::class, 'store']);
-        Route::get('/{id}', [CategoryController::class, 'show']);
-        Route::put('/{id}', [CategoryController::class, 'update']);
-        Route::delete('/{id}', [CategoryController::class, 'destroy']);
-        Route::delete('/{template_category_id}/data-sources/{datasource_id}', [CategoryController::class, 'detachDataSource']);
+    /*
+    |--------------------------------------------------------------------------
+    | User management — admin-only
+    |--------------------------------------------------------------------------
+    |
+    | All five endpoints require manage-users. There's no read-only
+    | distinction here because exposing the user list to non-admins would
+    | leak emails and account state.
+    |
+    */
+    Route::prefix('users')->middleware('permission:manage-users')->group(function () {
+        Route::get('/', [UserController::class, 'index']);
+        Route::get('/{id}', [UserController::class, 'show']);
+        Route::post('/', [UserController::class, 'store']);
+        Route::put('/{id}', [UserController::class, 'update']);
+        Route::delete('/{id}', [UserController::class, 'destroy']);
+        Route::put('/{id}/roles', [UserController::class, 'updateRoles']);
     });
 
-    Route::apiResource('templates', TemplateController::class);
+    /*
+    |--------------------------------------------------------------------------
+    | Devices — every authenticated user manages their own
+    |--------------------------------------------------------------------------
+    */
+    Route::post('register-device', [AuthController::class, 'registerDevice'])
+        ->middleware('permission:manage-own-devices');
 
-    Route::apiResource('ai-features', AiFeatureController::class);
+    /*
+    |--------------------------------------------------------------------------
+    | Categories — read for everyone, write for admins
+    |--------------------------------------------------------------------------
+    */
+    Route::prefix('categories')->group(function () {
+        Route::get('/', [CategoryController::class, 'index'])
+            ->middleware('permission:view-categories');
+        Route::get('/{id}', [CategoryController::class, 'show'])
+            ->middleware('permission:view-categories');
+
+        Route::post('/', [CategoryController::class, 'store'])
+            ->middleware('permission:manage-categories');
+        Route::put('/{id}', [CategoryController::class, 'update'])
+            ->middleware('permission:manage-categories');
+        Route::delete('/{id}', [CategoryController::class, 'destroy'])
+            ->middleware('permission:manage-categories');
+        Route::delete('/{template_category_id}/data-sources/{datasource_id}', [CategoryController::class, 'detachDataSource'])
+            ->middleware('permission:manage-categories');
+    });
+
+    /*
+    |--------------------------------------------------------------------------
+    | Templates — read for everyone, write for admins
+    |--------------------------------------------------------------------------
+    */
+    Route::prefix('templates')->group(function () {
+        Route::get('/', [TemplateController::class, 'index'])
+            ->middleware('permission:view-templates');
+        Route::get('/{template}', [TemplateController::class, 'show'])
+            ->middleware('permission:view-templates');
+
+        Route::post('/', [TemplateController::class, 'store'])
+            ->middleware('permission:manage-templates');
+        Route::put('/{template}', [TemplateController::class, 'update'])
+            ->middleware('permission:manage-templates');
+        Route::patch('/{template}', [TemplateController::class, 'update'])
+            ->middleware('permission:manage-templates');
+        Route::delete('/{template}', [TemplateController::class, 'destroy'])
+            ->middleware('permission:manage-templates');
+    });
+
+    /*
+    |--------------------------------------------------------------------------
+    | AI Features — read for everyone, write for admins
+    |--------------------------------------------------------------------------
+    */
+    Route::prefix('ai-features')->group(function () {
+        Route::get('/', [AiFeatureController::class, 'index'])
+            ->middleware('permission:view-ai-features');
+        Route::get('/{ai_feature}', [AiFeatureController::class, 'show'])
+            ->middleware('permission:view-ai-features');
+
+        Route::post('/', [AiFeatureController::class, 'store'])
+            ->middleware('permission:manage-ai-features');
+        Route::put('/{ai_feature}', [AiFeatureController::class, 'update'])
+            ->middleware('permission:manage-ai-features');
+        Route::patch('/{ai_feature}', [AiFeatureController::class, 'update'])
+            ->middleware('permission:manage-ai-features');
+        Route::delete('/{ai_feature}', [AiFeatureController::class, 'destroy'])
+            ->middleware('permission:manage-ai-features');
+    });
+
+    /*
+    |--------------------------------------------------------------------------
+    | AI Feature Configs — read for everyone, write for admins
+    |--------------------------------------------------------------------------
+    */
     Route::prefix('ai-feature-configs')->group(function () {
+        Route::get('/', [AiFeatureConfigController::class, 'index'])
+            ->middleware('permission:view-ai-feature-configs');
+        Route::get('/{aiFeatureConfig}', [AiFeatureConfigController::class, 'show'])
+            ->middleware('permission:view-ai-feature-configs');
 
-        // List & Show (unchanged)
-        Route::get('/', [AiFeatureConfigController::class, 'index']);
-        Route::get('/{aiFeatureConfig}', [AiFeatureConfigController::class, 'show']);
+        // Type-specific create
+        Route::post('/static-token', [AiFeatureConfigController::class, 'storeStaticToken'])
+            ->middleware('permission:manage-ai-feature-configs');
+        Route::post('/jwt', [AiFeatureConfigController::class, 'storeJwt'])
+            ->middleware('permission:manage-ai-feature-configs');
 
-        // Create - Type-specific
-        Route::post('/static-token', [AiFeatureConfigController::class, 'storeStaticToken']);
-        Route::post('/jwt', [AiFeatureConfigController::class, 'storeJwt']);
-
-        // Update - Type-specific
-        Route::put('/{aiFeatureConfig}/static-token', [AiFeatureConfigController::class, 'updateStaticToken']);
-        Route::put('/{aiFeatureConfig}/jwt', [AiFeatureConfigController::class, 'updateJwt']);
+        // Type-specific update
+        Route::put('/{aiFeatureConfig}/static-token', [AiFeatureConfigController::class, 'updateStaticToken'])
+            ->middleware('permission:manage-ai-feature-configs');
+        Route::put('/{aiFeatureConfig}/jwt', [AiFeatureConfigController::class, 'updateJwt'])
+            ->middleware('permission:manage-ai-feature-configs');
 
         // Switch auth type
-        Route::patch('/{aiFeatureConfig}/switch-auth', [AiFeatureConfigController::class, 'switchAuthType']);
+        Route::patch('/{aiFeatureConfig}/switch-auth', [AiFeatureConfigController::class, 'switchAuthType'])
+            ->middleware('permission:manage-ai-feature-configs');
 
-        // Delete (unchanged)
-        Route::delete('/{aiFeatureConfig}', [AiFeatureConfigController::class, 'destroy']);
+        Route::delete('/{aiFeatureConfig}', [AiFeatureConfigController::class, 'destroy'])
+            ->middleware('permission:manage-ai-feature-configs');
     });
+
+    /*
+    |--------------------------------------------------------------------------
+    | AI generation, upload, status, history — every user can use these
+    | for their OWN data. Ownership is enforced at the controller level
+    | (queries scoped to auth()->id()), so a user can't poll someone
+    | else's job by guessing job IDs.
+    |--------------------------------------------------------------------------
+    */
 
     // AI generation - tighter rate limit (10 per minute per user)
-    Route::middleware('throttle:10,1')->group(function () {
+    Route::middleware(['throttle:10,1', 'permission:generate-content'])->group(function () {
         Route::post('/generate/{feature}', [AiController::class, 'generate']);
     });
-    Route::get('/status/{jobId}', [AiController::class, 'status']);
+    Route::get('/status/{jobId}', [AiController::class, 'status'])
+        ->middleware('permission:generate-content');
 
-    Route::post('/upload', [UploadController::class, 'upload']);
+    Route::post('/upload', [UploadController::class, 'upload'])
+        ->middleware('permission:generate-content');
 
-    // Generation history
-    Route::prefix('history')->group(function () {
+    // Generation history — all four require view-own-history. The
+    // HistoryController scopes queries by user_id at the model layer,
+    // so users see only their own jobs even though the route doesn't
+    // distinguish.
+    Route::prefix('history')->middleware('permission:view-own-history')->group(function () {
         Route::get('/', [HistoryController::class, 'index']);
         Route::get('/{jobId}', [HistoryController::class, 'show']);
         Route::get('/{jobId}/download', [HistoryController::class, 'download']);
         Route::delete('/{jobId}', [HistoryController::class, 'destroy']);
     });
 
-    Route::prefix('task-status')->group(function () {
+    /*
+    |--------------------------------------------------------------------------
+    | Vendor Status Mappings — admin-only catalog
+    |--------------------------------------------------------------------------
+    */
+    Route::prefix('task-status')->middleware('permission:manage-task-status')->group(function () {
         Route::get('/', [VendorStatusMappingController::class, 'index']);
         Route::post('/', [VendorStatusMappingController::class, 'store']);
         Route::get('/{vendorStatusMapping}', [VendorStatusMappingController::class, 'show']);
         Route::put('/{vendorStatusMapping}', [VendorStatusMappingController::class, 'update']);
         Route::delete('/{vendorStatusMapping}', [VendorStatusMappingController::class, 'destroy']);
-
     });
 });

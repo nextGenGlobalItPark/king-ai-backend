@@ -8,6 +8,8 @@ use Illuminate\Http\Middleware\HandleCors;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Routing\Middleware\ThrottleRequests;
 use Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful;
+use Spatie\Permission\Middleware\PermissionMiddleware;
+use Spatie\Permission\Middleware\RoleMiddleware;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -26,6 +28,12 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'auth:sanctum' => EnsureFrontendRequestsAreStateful::class,
             'throttle' => ThrottleRequests::class,
+            // Spatie roles/permissions middleware. Usage in routes:
+            //   ->middleware('role:admin')
+            //   ->middleware('permission:manage-templates')
+            //   ->middleware('permission:manage-templates|manage-categories')   // OR
+            'role' => RoleMiddleware::class,
+            'permission' => PermissionMiddleware::class,
         ]);
     })
     ->withSchedule(function (Schedule $schedule) {
@@ -37,5 +45,19 @@ return Application::configure(basePath: dirname(__DIR__))
             ->onOneServer();
     })
     ->withExceptions(function (Exceptions $exceptions) {
-        //
+        // Render spatie's permission/role denial as our standard API
+        // envelope instead of the default Symfony 403 page. Without
+        // this, an API call hitting a permission gate gets HTML back,
+        // which breaks JSON clients.
+        $exceptions->render(function (\Spatie\Permission\Exceptions\UnauthorizedException $e, $request) {
+            if ($request->expectsJson() || $request->is('api/*')) {
+                return response()->json([
+                    'success' => false,
+                    'data' => null,
+                    'message' => 'You do not have permission to perform this action.',
+                    'errors' => null,
+                ], 403);
+            }
+            return null; // fall through to default rendering for non-JSON
+        });
     })->create();
