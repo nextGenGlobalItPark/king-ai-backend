@@ -6,29 +6,27 @@ use App\Models\User;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Support\Facades\Auth;
 
+/**
+ * Validation for POST /api/users (admin-only).
+ *
+ * Admins no longer supply a password — the controller calls
+ * UserService::createUserWithTemporaryPassword(), which generates one,
+ * emails the user, and returns it once in the API response so the admin
+ * can also share it out-of-band. The user is forced to change it on
+ * first login.
+ */
 class StoreUserRequest extends FormRequest
 {
-    /**
-     * Determine if the user is authorized to make this request.
-     */
     public function authorize(): bool
     {
-        if(Auth::user())
-            return true;
-        return false;
+        return (bool) Auth::user();
     }
 
-    /**
-     * Get the validation rules that apply to the request.
-     *
-     * @return array<string, \Illuminate\Contracts\Validation\ValidationRule|array<mixed>|string>
-     */
     public function rules(): array
     {
         return [
             'name' => ['required', 'string', 'max:' . User::NAME_MAX_LENGTH],
             'email' => ['required', 'string', 'email', 'max:' . User::EMAIL_MAX_LENGTH, 'unique:users'],
-            'password' => ['required', 'string', 'min:' . User::PASSWORD_MIN_LENGTH, 'confirmed'],
         ];
     }
 }

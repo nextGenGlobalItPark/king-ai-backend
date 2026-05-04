@@ -5,7 +5,11 @@ use App\Http\Controllers\AiFeatureConfigController;
 use App\Http\Controllers\AiFeatureController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CategoryController;
+use App\Http\Controllers\EmailVerificationController;
+use App\Http\Controllers\PasswordChangeController;
+use App\Http\Controllers\PasswordResetController;
 use App\Http\Controllers\TemplateController;
+use App\Http\Controllers\TwoFactorController;
 use App\Http\Controllers\UploadController;
 use App\Http\Controllers\VendorStatusMappingController;
 use App\Http\Controllers\WebhookController;
@@ -31,8 +35,94 @@ Route::post('/webhook/{jobId}', [WebhookController::class, 'handle'])
 Route::prefix('auth')->group(function () {
     Route::post('/register', [AuthController::class, 'register']);
     Route::post('/login', [AuthController::class, 'login']);
+
+    /*
+    |--------------------------------------------------------------------------
+    | Email Verification (public — user has no token until verified)
+    |--------------------------------------------------------------------------
+    |
+    | /email/verify  — { email, code } → marks user as verified.
+    | /email/resend  — { email } → sends a new 6-digit code.
+    |
+    | Both throttled tighter than normal auth: brute-forcing the 6-digit
+    | space (1M combinations) would otherwise be feasible. The service
+    | layer additionally caps attempts per code at 5 and applies a 60s
+    | resend cooldown, but the route-level throttle is what stops a
+    | distributed enumeration probe.
+    |
+    */
+    Route::post('/email/verify', [EmailVerificationController::class, 'verify'])
+        ->middleware('throttle:10,1');
+    Route::post('/email/resend', [EmailVerificationController::class, 'resend'])
+        ->middleware('throttle:5,1');
+
+    /*
+    |--------------------------------------------------------------------------
+    | Forced password change (after admin-created user logs in with temp pw)
+    |--------------------------------------------------------------------------
+    |
+    | Public — accepts a one-time change_token issued by /auth/login when
+    | must_change_password is true. Exchanges the token for a real sanctum
+    | token after the user supplies a new password.
+    |
+    */
+    Route::post('/password/change-initial', [PasswordChangeController::class, 'changeInitial'])
+        ->middleware('throttle:5,1');
+
+    /*
+    |--------------------------------------------------------------------------
+    | Forgot Password (public — code-based reset for verified users)
+    |--------------------------------------------------------------------------
+    |
+    | /password/forgot — { email } → sends a 6-digit reset code.
+    | /password/reset  — { email, code, new_password } → applies new pw.
+    |
+    | Both throttled the same way as email verification (brute-force the
+    | 6-digit code is otherwise feasible). Service layer additionally
+    | caps attempts at 5 and applies a 60s per-user cooldown.
+    |
+    | Note: this flow does NOT bypass 2FA. After reset, the user still
+    | logs in via /auth/login and goes through the 2FA challenge if
+    | enabled. Reset only changes the password.
+    |
+    */
+    Route::post('/password/forgot', [PasswordResetController::class, 'forgot'])
+        ->middleware('throttle:5,1');
+    Route::post('/password/reset', [PasswordResetController::class, 'reset'])
+        ->middleware('throttle:10,1');
+
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);
+    });
+});
+
+/*
+|--------------------------------------------------------------------------
+| Two-Factor Authentication
+|--------------------------------------------------------------------------
+|
+| /two-factor/challenge is unauthenticated — it accepts a challenge_token
+| issued by /auth/login when the user has 2FA enabled, plus a TOTP code
+| or recovery code, and exchanges them for a real sanctum token.
+|
+| Setup/management endpoints (setup, confirm, status, recovery-codes,
+| disable) require sanctum auth: the user is already logged in and
+| managing their own 2FA. Destructive operations additionally require
+| password reconfirmation in the request body.
+|
+*/
+Route::prefix('two-factor')->group(function () {
+    // Challenge — exchange challenge_token + code for sanctum token.
+    // Throttled tighter than normal auth to slow brute-force on the OTP.
+    Route::post('/challenge', [TwoFactorController::class, 'challenge'])
+        ->middleware('throttle:10,1');
+
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::get('/status', [TwoFactorController::class, 'status']);
+        Route::post('/setup', [TwoFactorController::class, 'setup']);
+        Route::post('/confirm', [TwoFactorController::class, 'confirm']);
+        Route::post('/recovery-codes', [TwoFactorController::class, 'regenerateRecoveryCodes']);
+        Route::delete('/', [TwoFactorController::class, 'disable']);
     });
 });
 

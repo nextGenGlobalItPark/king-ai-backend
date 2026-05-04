@@ -47,15 +47,39 @@ class UserController extends Controller
         }
     }
 
+    /**
+     * Admin-only: create a user with a temporary password.
+     *
+     * The temp password is generated server-side, emailed to the user
+     * separately from the verification code, and ALSO returned ONCE in
+     * this API response so the admin can pass it along out-of-band.
+     * The user is forced to change it on first login.
+     *
+     * Response shape:
+     *   {
+     *     "data": {
+     *       "user": { ... },
+     *       "temporary_password": "Ab3kP9..."   // plaintext, shown ONCE
+     *     },
+     *     "message": "User created. Temporary password is shown ..."
+     *   }
+     */
     public function store(StoreUserRequest $request): JsonResponse
     {
         try {
-            DB::beginTransaction();
-            $user = $this->userService->createUser($request->validated());
-            DB::commit();
-            return $this->success(new UserResource($user), 'User created successfully', Response::HTTP_CREATED);
+            [$user, $tempPassword] = $this->userService->createUserWithTemporaryPassword(
+                $request->validated()
+            );
+
+            return $this->success(
+                data: [
+                    'user' => new UserResource($user),
+                    'temporary_password' => $tempPassword,
+                ],
+                message: 'User created. Two emails were sent (verification code + temp password). The temporary password is shown once — store it now if you need to share it out-of-band.',
+                status: Response::HTTP_CREATED
+            );
         } catch (\Exception $e) {
-            DB::rollBack();
             return $this->error(errors: null, message: $e->getMessage());
         }
     }
