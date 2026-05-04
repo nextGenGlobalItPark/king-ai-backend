@@ -502,7 +502,7 @@ app/
 │                               PushNotificationServiceInterface, UserService
 ├── Strategies/
 │   ├── AuthStrategy/           JwtAuthStrategy, StaticTokenAuthStrategy
-│   └── GenericPollStrategy     (+ legacy KlingPollStrategy, ViduPollStrategy)
+│   └── GenericPollStrategy     (single config-driven poll strategy for all vendors)
 └── Traits/                     ResponseTrait
 
 config/
@@ -555,11 +555,23 @@ The `ai_feature_configs` table stores the **name** of the env variable (e.g., `K
 
 After any change to `.env` or config files: `php artisan config:cache`. After any route changes: `php artisan route:cache`. After any code changes: `pm2 restart all` (queue workers cache code in memory).
 
+### Scheduled tasks
+
+Schedules are registered in `bootstrap/app.php` via `->withSchedule(...)`. Laravel 12 does not load `app/Console/Kernel.php` — that file should not exist in this project. Currently scheduled:
+
+- `generations:cleanup --days=30` — daily at 03:00, with `withoutOverlapping()` and `onOneServer()`. Removes locally-stored vendor assets older than 30 days and updates the matching `ai_jobs.result` records to flag them as cleaned up.
+
+Cron must invoke `php artisan schedule:run` every minute on the VPS for any of this to fire:
+
+```
+* * * * * cd /var/www/king-ai && php artisan schedule:run >> /dev/null 2>&1
+```
+
 ---
 
 ## Error Handling
 
-The custom `Handler` class in `App\Exceptions` provides unified API error responses:
+The custom `Handler` class in `App\Exceptions` provides unified API error responses. It is wired up in `AppServiceProvider::register()` by binding `Illuminate\Contracts\Debug\ExceptionHandler` to `App\Exceptions\Handler`.
 
 All API exceptions are caught and formatted into the standard `{ success, data, message, errors }` structure. Specific exception types map to appropriate HTTP status codes: `ValidationException` → 422, `AuthenticationException` → 401, `ModelNotFoundException` → 404, `MethodNotAllowedHttpException` → 405. In debug mode, error responses include exception class, file, line, and a truncated stack trace.
 

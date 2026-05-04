@@ -348,18 +348,26 @@ Notifications fire when AI generation completes or fails, and when templates or 
 
 ## Scheduled Tasks
 
-Add to `app/Console/Kernel.php`:
+The schedule is registered in `bootstrap/app.php` via `->withSchedule(...)` (Laravel 12 style — `app/Console/Kernel.php` is not used and should not be re-introduced):
 
 ```php
-protected function schedule(Schedule $schedule): void
-{
-    $schedule->command('generations:cleanup --days=30')->dailyAt('02:00');
-}
+->withSchedule(function (Schedule $schedule) {
+    $schedule->command('generations:cleanup --days=30')
+        ->dailyAt('03:00')
+        ->withoutOverlapping()
+        ->onOneServer();
+})
 ```
 
-Enable the cron: `* * * * * cd /var/www/kingai && php artisan schedule:run >> /dev/null 2>&1`
+Enable the cron on the VPS so `schedule:run` fires every minute:
+
+```
+* * * * * cd /var/www/kingai && php artisan schedule:run >> /dev/null 2>&1
+```
 
 The cleanup command deletes generation assets older than the specified days, updates job records to mark assets as cleaned up, and removes empty directories. Use `--dry-run` to preview.
+
+To list everything that's scheduled: `php artisan schedule:list`. To verify the cron is actually firing: `php artisan schedule:test`.
 
 ---
 

@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -26,6 +27,14 @@ return Application::configure(basePath: dirname(__DIR__))
             'auth:sanctum' => EnsureFrontendRequestsAreStateful::class,
             'throttle' => ThrottleRequests::class,
         ]);
+    })
+    ->withSchedule(function (Schedule $schedule) {
+        // Cleanup old generation assets (default 30 day retention).
+        // Runs daily at 03:00 to keep disk usage in check on the VPS.
+        $schedule->command('generations:cleanup --days=30')
+            ->dailyAt('03:00')
+            ->withoutOverlapping()
+            ->onOneServer();
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //

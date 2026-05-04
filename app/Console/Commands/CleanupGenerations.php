@@ -15,8 +15,7 @@ use Illuminate\Support\Facades\Storage;
  *   php artisan generations:cleanup --days=7     # Custom retention
  *   php artisan generations:cleanup --dry-run    # Preview without deleting
  *
- * Schedule in app/Console/Kernel.php:
- *   $schedule->command('generations:cleanup --days=30')->daily();
+ * Scheduled via bootstrap/app.php (->withSchedule). Runs daily at 03:00.
  */
 class CleanupGenerations extends Command
 {
