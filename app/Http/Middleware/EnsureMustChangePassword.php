@@ -11,8 +11,18 @@ use Symfony\Component\HttpFoundation\Response;
  * they can use the rest of the panel.
  *
  * Runs AFTER EnsureEmailVerified — we always want email-verified before
- * password-change, since the password change page assumes the email is
- * trustworthy enough to set credentials with.
+ * password-change. Critically, this middleware SKIPS itself entirely
+ * when the user has not yet verified their email. Otherwise the two
+ * middlewares would bounce the user between /admin/email-verify and
+ * /admin/change-password forever:
+ *
+ *   - EnsureEmailVerified would let /admin/email-verify through
+ *     (whitelisted) but redirect /admin/change-password
+ *   - EnsureMustChangePassword would let /admin/change-password through
+ *     (whitelisted) but redirect /admin/email-verify
+ *
+ * By gating on hasVerifiedEmail() FIRST, this middleware effectively
+ * waits its turn — it only activates once email verification is done.
  *
  * Once must_change_password is cleared on the user, this middleware is
  * a no-op for the rest of their session.
@@ -23,20 +33,39 @@ class EnsureMustChangePassword
     {
         $user = $request->user();
 
-        if (! $user || ! $user->must_change_password) {
+        if (! $user) {
             return $next($request);
         }
 
-        $currentRoute = $request->route()?->getName();
-        $allowedRoutes = [
-            'filament.admin.pages.change-password',
-            'filament.admin.auth.logout',
+        // CRITICAL: don't activate until email is verified. The
+        // EnsureEmailVerified middleware (which runs BEFORE this one) will
+        // handle the redirect to /admin/email-verify. If we tried to
+        // redirect to /admin/change-password here while the user is
+        // unverified, EnsureEmailVerified would immediately bounce them
+        // back to /admin/email-verify, creating an infinite loop.
+        if (! $user->hasVerifiedEmail()) {
+            return $next($request);
+        }
+
+        if (! $user->must_change_password) {
+            return $next($request);
+        }
+
+        $path = trim($request->path(), '/');
+
+        $allowedPathPatterns = [
+            'admin/change-password',
+            'admin/logout',
+            'livewire/update',
+            'livewire/upload-file',
         ];
 
-        if (in_array($currentRoute, $allowedRoutes, true)) {
-            return $next($request);
+        foreach ($allowedPathPatterns as $allowed) {
+            if ($path === $allowed || str_starts_with($path, $allowed . '/')) {
+                return $next($request);
+            }
         }
 
-        return redirect()->route('filament.admin.pages.change-password');
+        return redirect('/admin/change-password');
     }
 }

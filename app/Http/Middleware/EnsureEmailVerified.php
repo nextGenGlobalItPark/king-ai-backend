@@ -4,21 +4,20 @@ namespace App\Http\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Filament-panel gate that blocks access for users whose email has not
  * been verified.
  *
- * Runs AFTER Filament's Authenticate middleware. If the logged-in user
- * has a null email_verified_at, they're redirected to a Filament page
- * where they can enter the 6-digit code that was emailed to them. The
- * verification page itself is whitelisted (otherwise we'd loop), as is
- * the logout route.
+ * Whitelisting by URL path (not route name): Filament's auto-generated
+ * route names from pages([]) registration vary by version, and matching
+ * by name caused a redirect loop. Path matching is stable.
  *
- * This check intentionally runs BEFORE EnsureMustChangePassword and
- * EnsureTwoFactorChallenge — email verification is the prerequisite for
- * everything else.
+ * VERSION MARKER: path-based-v2 — if you see this in the logs, this is
+ * the version on disk. If you see the redirect loop AND don't see this
+ * in the logs, the file on disk is the OLD route-name version.
  */
 class EnsureEmailVerified
 {
@@ -30,16 +29,30 @@ class EnsureEmailVerified
             return $next($request);
         }
 
-        $currentRoute = $request->route()?->getName();
-        $allowedRoutes = [
-            'filament.admin.pages.email-verify',
-            'filament.admin.auth.logout',
+        $path = trim($request->path(), '/');
+
+        $allowedPathPatterns = [
+            'admin/email-verify',
+            'admin/logout',
+            'livewire/update',
+            'livewire/upload-file',
         ];
 
-        if (in_array($currentRoute, $allowedRoutes, true)) {
-            return $next($request);
+        // Diagnostic log — remove this line once the redirect loop issue is
+        // confirmed resolved. The 'EnsureEmailVerified-v2' marker confirms
+        // this exact file is being executed (vs a stale cached version).
+        Log::debug('EnsureEmailVerified-v2', [
+            'path' => $path,
+            'user_id' => $user->id,
+            'verified' => (bool) $user->email_verified_at,
+        ]);
+
+        foreach ($allowedPathPatterns as $allowed) {
+            if ($path === $allowed || str_starts_with($path, $allowed . '/')) {
+                return $next($request);
+            }
         }
 
-        return redirect()->route('filament.admin.pages.email-verify');
+        return redirect('/admin/email-verify');
     }
 }

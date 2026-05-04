@@ -10,10 +10,11 @@ use Symfony\Component\HttpFoundation\Response;
  * Ensures a Filament-authenticated user with 2FA enabled has passed the
  * 2FA challenge for the current session.
  *
- * Runs AFTER Filament's Authenticate middleware. If the session is missing
- * the `two_factor_passed` flag and the user has 2FA enabled, redirect to
- * the challenge page. The challenge page itself is whitelisted (otherwise
- * we'd loop), as is the logout route (so a user can always escape).
+ * Runs AFTER Filament's Authenticate, EnsureEmailVerified, and
+ * EnsureMustChangePassword. Critically, this middleware skips itself
+ * if any earlier prerequisite has not been satisfied — otherwise the
+ * middlewares would bounce the user between their respective gate pages
+ * forever (each tries to redirect away from the others' pages).
  *
  * The session flag is cleared on logout (StartSession + AuthenticateSession
  * tear down the whole session), so re-login always re-challenges.
@@ -24,9 +25,20 @@ class EnsureTwoFactorChallenge
     {
         $user = $request->user();
 
-        // Not logged in (shouldn't happen — Authenticate runs first — but be safe)
-        // or 2FA not enabled for this user: nothing to do.
-        if (! $user || ! $user->hasTwoFactorEnabled()) {
+        if (! $user) {
+            return $next($request);
+        }
+
+        // Wait for prior gates: email verification and forced password
+        // change. Only this middleware's predecessors should redirect
+        // until those are done. Trying to redirect to /admin/two-factor-
+        // challenge while the user is still unverified or holding a
+        // temp password would create a redirect loop with those gates.
+        if (! $user->hasVerifiedEmail() || $user->must_change_password) {
+            return $next($request);
+        }
+
+        if (! $user->hasTwoFactorEnabled()) {
             return $next($request);
         }
 
@@ -35,18 +47,21 @@ class EnsureTwoFactorChallenge
             return $next($request);
         }
 
-        // Whitelist routes that must remain accessible during the challenge:
-        // the challenge page itself, and logout (so users can back out).
-        $currentRoute = $request->route()?->getName();
-        $allowedRoutes = [
-            'filament.admin.pages.two-factor-challenge',
-            'filament.admin.auth.logout',
+        $path = trim($request->path(), '/');
+
+        $allowedPathPatterns = [
+            'admin/two-factor-challenge',
+            'admin/logout',
+            'livewire/update',
+            'livewire/upload-file',
         ];
 
-        if (in_array($currentRoute, $allowedRoutes, true)) {
-            return $next($request);
+        foreach ($allowedPathPatterns as $allowed) {
+            if ($path === $allowed || str_starts_with($path, $allowed . '/')) {
+                return $next($request);
+            }
         }
 
-        return redirect()->route('filament.admin.pages.two-factor-challenge');
+        return redirect('/admin/two-factor-challenge');
     }
 }
