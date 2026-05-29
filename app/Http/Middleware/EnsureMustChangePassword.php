@@ -47,6 +47,13 @@ class EnsureMustChangePassword
             return $next($request);
         }
 
+        // OAuth-authenticated sessions bypass this gate — OAuth users always
+        // have must_change_password = false, but this is an explicit guard
+        // consistent with the other middlewares.
+        if ($request->session()->get('oauth_authenticated')) {
+            return $next($request);
+        }
+
         if (! $user->must_change_password) {
             return $next($request);
         }

@@ -29,6 +29,13 @@ class EnsureEmailVerified
             return $next($request);
         }
 
+        // OAuth-authenticated sessions bypass this gate — the OAuth provider
+        // already verified the email, and we set email_verified_at at
+        // account creation time. This check is a belt-and-suspenders guard.
+        if ($request->session()->get('oauth_authenticated')) {
+            return $next($request);
+        }
+
         $path = trim($request->path(), '/');
 
         $allowedPathPatterns = [

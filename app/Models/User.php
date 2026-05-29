@@ -7,6 +7,7 @@ use Filament\Models\Contracts\FilamentUser;
 use Filament\Panel;
 use Illuminate\Contracts\Auth\MustVerifyEmail as MustVerifyEmailContract;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
@@ -52,6 +53,7 @@ class User extends Authenticatable implements FilamentUser, MustVerifyEmailContr
         'name',
         'email',
         'password',
+        'email_verified_at',
         'must_change_password',
     ];
 
@@ -118,6 +120,31 @@ class User extends Authenticatable implements FilamentUser, MustVerifyEmailContr
     public function passwordResetCode(): HasOne
     {
         return $this->hasOne(PasswordResetCode::class);
+    }
+
+    /**
+     * All linked OAuth identities for this user (Google, Apple, etc.).
+     * One user can have multiple OAuth accounts — one per provider.
+     */
+    public function oauthAccounts(): HasMany
+    {
+        return $this->hasMany(OauthAccount::class);
+    }
+
+    /**
+     * Returns true if this user has no password — i.e. they authenticate
+     * exclusively via OAuth (Google / Apple).
+     *
+     * Used to gate password-sensitive operations that require reconfirmation
+     * (2FA disable, recovery-code regeneration). Those endpoints return 403
+     * for OAuth-only users since they have no password to confirm with.
+     *
+     * An OAuth user who later sets a password via the forgot-password flow
+     * is no longer considered OAuth-only and can use those operations normally.
+     */
+    public function isOauthOnly(): bool
+    {
+        return is_null($this->password);
     }
 
     /**

@@ -32,12 +32,15 @@ The system is designed around one core principle: **vendor integrations are enti
 │  (Next.js)   │◀────│                                          │◀────│             │
 └─────────────┘     │  Laravel 12 / PHP 8.2 / MySQL / Nginx    │     └─────────────┘
                     │                                          │
-                    │  • Auth (Sanctum)                        │     ┌─────────────┐
+                    │  • Auth (Sanctum + OAuth2)               │     ┌─────────────┐
                     │  • Queue Workers (Generation/Polling)     │────▶│  Vidu API   │
                     │  • Asset Storage (Local filesystem)       │◀────│             │
                     │  • Push Notifications (Firebase FCM)      │     └─────────────┘
                     │  • Admin Panel (Filament)                 │
-                    └──────────────────────────────────────────┘
+                    │                                          │     ┌─────────────┐
+                    │  • Social sign-in (Google/Apple) ────────────▶│  Supabase    │
+                    │    brokered through Supabase Auth         │     │  Auth (PKCE) │
+                    └──────────────────────────────────────────┘     └─────────────┘
 ```
 
 ---
@@ -48,7 +51,7 @@ The system is organized into six major layers:
 
 **API Layer** — Controllers, Form Requests, and API Resources handle HTTP requests, validate input, format responses, and enforce authentication via Sanctum bearer tokens.
 
-**Service Layer** — `AiGenerationService` orchestrates the generation and polling logic. `AuthStrategyResolver` and `PollStrategyResolver` select the right strategy for each vendor. `FCMPushService` handles push delivery. `UserService` handles user operations.
+**Service Layer** — `AiGenerationService` orchestrates the generation and polling logic. `AuthStrategyResolver` and `PollStrategyResolver` select the right strategy for each vendor. `FCMPushService` handles push delivery. `UserService` handles user operations. `OauthService` orchestrates the PKCE flow with Supabase Auth for Google/Apple sign-in (build redirect URL → exchange code → find-or-create user).
 
 **Strategy Layer** — Implements the Strategy Pattern for vendor-specific behavior. `GenericPollStrategy` handles all vendors using configurable response mappings. `JwtAuthStrategy` and `StaticTokenAuthStrategy` handle different authentication methods.
 
@@ -69,6 +72,7 @@ users
   │
   ├──< devices                    (user has many devices for push notifications)
   ├──< ai_jobs                    (user has many generation jobs)
+  ├──< oauth_accounts             (linked Google/Apple identities)
   └──  created_by on most tables  (audit trail)
 
 data_sources                       (vendors: Kling, Vidu)
@@ -102,14 +106,17 @@ template_categories                (grouping for templates)
 
 ### Table Details
 
-**users** — Application users with Sanctum token authentication, email verification, two-factor authentication, and forced-password-change support.
-Columns: id, name, email, password, email_verified_at, must_change_password, two_factor_secret (encrypted), two_factor_recovery_codes (encrypted JSON), two_factor_confirmed_at, remember_token, timestamps, soft_deletes.
+**users** — Application users with Sanctum token authentication, email verification, two-factor authentication, forced-password-change support, and OAuth identity linking.
+Columns: id, name, email, password (nullable — OAuth-only users have no password), email_verified_at, must_change_password, two_factor_secret (encrypted), two_factor_recovery_codes (encrypted JSON), two_factor_confirmed_at, remember_token, timestamps, soft_deletes.
 
 **email_verification_codes** — Active 6-digit codes for email verification. One row per user (unique index on user_id); new requests overwrite the previous code.
 Columns: id, user_id (FK, unique), code (bcrypt-hashed), attempts, expires_at, last_sent_at, timestamps.
 
 **password_reset_codes** — Active 6-digit codes for the forgot-password flow. Same structure as email_verification_codes; separate table so a user can have an active verification code AND an active reset code at the same time.
 Columns: id, user_id (FK, unique), code (bcrypt-hashed), attempts, expires_at, last_sent_at, timestamps.
+
+**oauth_accounts** — Links a local user to one or more external OAuth identities (Google, Apple). A user can have multiple rows (one per provider). The (provider, provider_id) pair is unique across the system — two users cannot share the same Google or Apple identity. `provider_id` is the Supabase user UUID returned after PKCE exchange and is stable across logins for the same identity. `provider_email` is informational; the email of record is always `users.email`.
+Columns: id, user_id (FK, cascade on delete), provider ('google' | 'apple'), provider_id, provider_email (nullable), timestamps. Unique on [provider, provider_id].
 
 **roles, permissions, model_has_roles, model_has_permissions, role_has_permissions** — `spatie/laravel-permission` v6 tables. Standard schema. See [Authentication and Authorization](#authentication-and-authorization).
 
@@ -354,6 +361,8 @@ The login endpoint checks five conditions in strict priority order. The first fa
 
 This ordering prevents enumeration (an attacker can't tell whether a wrong password is for an unverified vs. fully-active account) while still giving the legitimate client an actionable next step.
 
+**OAuth sign-in bypasses this flow entirely.** Users authenticating via Google or Apple skip steps 1–4 — the OAuth provider has already verified the identity and email, OAuth users have no password to change, and 2FA is deliberately not challenged for OAuth logins. See the [OAuth2 — Google & Apple Sign-In](#oauth2--google--apple-sign-in) section below.
+
 ### Email verification
 
 Six-digit numeric codes (mobile-keypad-friendly). 15-minute expiry, max 5 verification attempts per code (after which the code is invalidated), 60-second cooldown between resends. Codes are bcrypt-hashed in the `email_verification_codes` table; the user submits plaintext and the server compares with `Hash::check`.
@@ -412,6 +421,8 @@ EnsureTwoFactorChallenge  ──→  redirect to /admin/two-factor-challenge if 
 
 The session-level `two_factor_passed` flag is cleared on logout (since `StartSession` + `AuthenticateSession` tear down the whole session), so re-login always re-challenges.
 
+**OAuth session bypass:** when a user authenticates via the Filament OAuth flow (`/admin/oauth/{provider}`), the callback sets `oauth_authenticated = true` on the session. All three gate middlewares check this flag and short-circuit — the OAuth provider has already verified email, OAuth users have `must_change_password = false`, and 2FA challenge is explicitly skipped for OAuth logins. The session flag is destroyed by logout the same way `two_factor_passed` is.
+
 ### Authorization — roles and permissions
 
 Authorization is provided by `spatie/laravel-permission` v6. Two roles are seeded:
@@ -450,6 +461,84 @@ php artisan tinker
 ```
 
 After running the seeder or any direct DB role/permission edit, run `php artisan permission:cache-reset` to flush spatie's 24-hour permission cache.
+
+### OAuth2 — Google & Apple Sign-In
+
+Social sign-in is brokered through **Supabase Auth**, which acts as the OAuth provider on behalf of Google and Apple. Laravel owns the entire flow — mobile/web clients never see tokens from Google or Apple directly. The protocol is OAuth2 with **PKCE** (Proof Key for Code Exchange), which secures the server-side flow against authorization code interception without requiring a client secret in the browser/app.
+
+**Flow:**
+
+```
+Mobile/Web client
+      │
+      │  Opens browser / WebView to:
+      │  GET /api/auth/oauth/{provider}      (or /admin/oauth/{provider} for Filament)
+      ▼
+  OauthController::redirect (or FilamentOauthController::redirect)
+      │  Generates code_verifier + code_challenge (PKCE S256)
+      │  Stores verifier in Cache (10-min TTL, keyed by state UUID)
+      │  Builds redirect_to with state UUID embedded:
+      │     {APP_URL}/api/auth/oauth/google/callback?_s={state_uuid}
+      │  Redirects to Supabase /auth/v1/authorize
+      ▼
+  Supabase Auth  →  Google / Apple consent screen
+      │  User authenticates
+      │  Supabase redirects back to our callback with ?code=xxx
+      ▼
+  OauthController::callback (or FilamentOauthController::callback)
+      │  Retrieves verifier from Cache using state UUID (Cache::pull, single-use)
+      │  POSTs code + verifier to Supabase /auth/v1/token?grant_type=pkce
+      │  Receives Supabase user object (id, email, user_metadata.full_name)
+      │  Calls OauthService::findOrCreateUser
+      │     ├── Existing oauth_account → return linked user
+      │     ├── Existing email match    → merge (link new oauth_account row,
+      │     │                              mark email verified)
+      │     └── New identity            → create User with role=user,
+      │                                    email_verified_at=now(),
+      │                                    must_change_password=false,
+      │                                    password=null
+      │
+      ├──  API:    Issues Sanctum token, redirects to:
+      │            vidioking://auth/callback?token={sanctum_token}
+      │            (configurable scheme via OAUTH_MOBILE_REDIRECT_SCHEME)
+      │
+      └──  Filament: Calls Auth::login(), sets oauth_authenticated session
+                     flag, regenerates session, redirects to /admin
+```
+
+**PKCE state storage** uses Laravel Cache keyed by a UUID embedded in `redirect_to` as `?_s={state}`. This avoids depending on Supabase to echo back a custom `state` parameter. The verifier is `Cache::pull`-ed atomically on callback, making it single-use.
+
+**Account resolution rules:**
+
+| Scenario | Result |
+|---|---|
+| `oauth_accounts` row with matching `(provider, provider_id)` exists | Return the linked user directly |
+| No `oauth_accounts` row but `users.email` matches | **Merge** — create `oauth_accounts` row linked to the existing user; mark email verified if not already |
+| Neither row exists | **Auto-create** — new User with `role=user`, email verified, no password, then create `oauth_accounts` row |
+
+**Behavioral differences from email/password login:**
+
+| Aspect | OAuth login | Email/password login |
+|---|---|---|
+| Email verification gate | Skipped — OAuth provider guarantees it | Required |
+| `must_change_password` gate | Skipped — always `false` for OAuth users | Applies if set |
+| 2FA challenge | **Skipped** — OAuth is treated as trusted authentication | Applies if 2FA is enabled |
+| Sanctum token issuance | Direct on callback | May require challenge_token / 2FA exchange first |
+
+**OAuth-only users** (defined as `users.password IS NULL`) cannot call `DELETE /api/two-factor` or `POST /api/two-factor/recovery-codes` — both endpoints return `403` with a uniform message ("This operation is not available for accounts signed in via Google or Apple"). These endpoints require password reconfirmation, which OAuth-only users cannot provide. A user who later sets a password via the forgot-password flow is no longer OAuth-only and gains access to these endpoints.
+
+**Filament panel:** the admin login page shows Google and Apple buttons above the email/password form (rendered via `PanelsRenderHook::AUTH_LOGIN_FORM_BEFORE`). Only users with `access-admin-panel` permission can complete the Filament OAuth flow — others are redirected to `/admin/login` with an error message. The callback sets `oauth_authenticated = true` on the session, which all three Filament gate middlewares (`EnsureEmailVerified`, `EnsureMustChangePassword`, `EnsureTwoFactorChallenge`) detect and use to short-circuit their checks.
+
+**Configuration** (`config/supabase.php`, populated from `.env`):
+
+| Key | `.env` variable | Purpose |
+|---|---|---|
+| `url` | `SUPABASE_URL` | Supabase project URL, e.g. `https://xyz.supabase.co` |
+| `anon_key` | `SUPABASE_ANON_KEY` | Supabase legacy anon JWT — used as `apikey` header for Auth REST calls |
+| `mobile_redirect_scheme` | `OAUTH_MOBILE_REDIRECT_SCHEME` | Deep link scheme (default `vidioking`) |
+| `web_redirect_url` | `OAUTH_WEB_REDIRECT_URL` | Reserved for future web-client redirect |
+
+Supabase dashboard must have Google and Apple enabled under Authentication → Providers, and all four Laravel callback URLs allowlisted under Authentication → URL Configuration → Redirect URLs (one each for API and Filament, one each per provider).
 
 ### Vendor authentication
 
@@ -575,7 +664,7 @@ The `AiFeatureConfigResource` includes a "Load Preset" action that auto-fills al
 
 ### Controllers
 
-`AuthController` — register, login, logout, device registration. Login enforces the five-step priority gate (credentials → email verified → must_change_password → 2FA → token). `EmailVerificationController` — `/email/verify` and `/email/resend` for the 6-digit code flow. `PasswordChangeController` — forced password change for admin-created users with temp passwords. `PasswordResetController` — forgot-password flow (issues reset codes, accepts code + new password). `TwoFactorController` — setup, confirm, status, recovery code regeneration, disable, and the unauthenticated challenge endpoint that exchanges challenge_token + code for a Sanctum token. `UserController` — CRUD for users, `updateRoles` for role assignment with self-demotion guard. `CategoryController` — CRUD for template categories with data source attachment. `TemplateController` — CRUD for templates with metadata and content uploads, auto-fills data_source_id from ai_feature. `AiFeatureController` — CRUD for AI features. `AiFeatureConfigController` — type-specific create/update for static token and JWT configs, auth type switching. `AiController` — generation endpoint (queues job) and status endpoint (returns normalized response, scoped to auth()->id()). `HistoryController` — generation history list/detail/download/hide, all scoped to auth()->id(). `UploadController` — file upload with MIME verification and size limits. `VendorStatusMappingController` — CRUD for vendor status mappings. `WebhookController` — receives vendor callbacks, normalizes via GenericPollStrategy, dispatches AssetDownloadJob.
+`AuthController` — register, login, logout, device registration. Login enforces the five-step priority gate (credentials → email verified → must_change_password → 2FA → token). `EmailVerificationController` — `/email/verify` and `/email/resend` for the 6-digit code flow. `PasswordChangeController` — forced password change for admin-created users with temp passwords. `PasswordResetController` — forgot-password flow (issues reset codes, accepts code + new password). `TwoFactorController` — setup, confirm, status, recovery code regeneration, disable, and the unauthenticated challenge endpoint that exchanges challenge_token + code for a Sanctum token. Includes guards that 403 OAuth-only users away from `disable` and `regenerateRecoveryCodes` (no password to reconfirm with). `OauthController` — API-side OAuth redirect and callback. Initiates the PKCE flow, exchanges the code with Supabase, resolves or creates the local user, issues a Sanctum token, and redirects to the mobile deep link (`vidioking://auth/callback?token=...`). `FilamentOauthController` — Filament/web equivalent. Identical PKCE mechanics but ends in `Auth::login()` + an `oauth_authenticated` session flag and redirects to `/admin`. Only users with `access-admin-panel` may complete the flow. `UserController` — CRUD for users, `updateRoles` for role assignment with self-demotion guard. `CategoryController` — CRUD for template categories with data source attachment. `TemplateController` — CRUD for templates with metadata and content uploads, auto-fills data_source_id from ai_feature. `AiFeatureController` — CRUD for AI features. `AiFeatureConfigController` — type-specific create/update for static token and JWT configs, auth type switching. `AiController` — generation endpoint (queues job) and status endpoint (returns normalized response, scoped to auth()->id()). `HistoryController` — generation history list/detail/download/hide, all scoped to auth()->id(). `UploadController` — file upload with MIME verification and size limits. `VendorStatusMappingController` — CRUD for vendor status mappings. `WebhookController` — receives vendor callbacks, normalizes via GenericPollStrategy, dispatches AssetDownloadJob.
 
 ### Form Requests
 
@@ -612,11 +701,13 @@ app/
 │   │                           TwoFactorSettings, Auth/ForgotPassword
 │   └── Resources/              7 Filament resources with Pages/ and RelationManagers/
 ├── Http/
-│   ├── Controllers/            16 controllers (incl. AuthController, EmailVerificationController,
+│   ├── Controllers/            18 controllers (incl. AuthController, EmailVerificationController,
 │   │                           PasswordChangeController, PasswordResetController,
-│   │                           TwoFactorController, WebhookController)
+│   │                           TwoFactorController, OauthController, FilamentOauthController,
+│   │                           WebhookController)
 │   ├── Middleware/             EnsureEmailVerified, EnsureMustChangePassword,
 │   │                           EnsureTwoFactorChallenge
+│   │                           (all three short-circuit if 'oauth_authenticated' session flag is set)
 │   ├── Requests/               18+ form request validators
 │   └── Resources/              6 API resource transformers
 ├── Jobs/                       AiGenerationJob, AiPollingJob, AssetDownloadJob,
@@ -625,9 +716,9 @@ app/
 │                               TemplateEventPushNotification,
 │                               CategoryEventPushNotification
 ├── Models/                     User, AiFeature, AiFeatureConfig, AiJob, DataSource, Device,
-│                               EmailVerificationCode, PasswordResetCode, Template,
-│                               TemplateCategory, TemplateCategoryDataSource, TemplateContent,
-│                               VendorStatusMapping
+│                               EmailVerificationCode, OauthAccount, PasswordResetCode,
+│                               Template, TemplateCategory, TemplateCategoryDataSource,
+│                               TemplateContent, VendorStatusMapping
 ├── Notifications/              VerifyEmailNotification, TemporaryPasswordNotification,
 │                               PasswordResetNotification (all ShouldQueue)
 ├── Providers/                  AppServiceProvider, EventServiceProvider,
@@ -635,7 +726,8 @@ app/
 ├── Services/                   AiGenerationService, AuthStrategyResolver, PollStrategyResolver,
 │                               FCMPushService, PushNotificationServiceInterface,
 │                               EmailVerificationService, PasswordChangeService,
-│                               PasswordResetService, TwoFactorService, UserService
+│                               PasswordResetService, TwoFactorService, UserService,
+│                               OauthService
 ├── Strategies/
 │   ├── AuthStrategy/           JwtAuthStrategy, StaticTokenAuthStrategy
 │   └── GenericPollStrategy     (single config-driven poll strategy for all vendors)
@@ -648,20 +740,24 @@ config/
 ├── livewire.php                Upload settings (100MB, allowed MIME types)
 ├── permission.php              spatie/laravel-permission config (teams=false)
 ├── push.php                    Push notification provider setting
+├── supabase.php                Supabase Auth config — URL, anon key, mobile redirect scheme
 ├── vendor-credentials.php      Vendor API keys (env variable mapping)
 └── [standard Laravel configs]
 
-database/migrations/             34 migrations in chronological order
+database/migrations/             36 migrations in chronological order
                                  Including 2026_05_04_* batch for 2FA, email verification,
-                                 must_change_password, password reset, and permission tables
+                                 must_change_password, password reset, and permission tables;
+                                 and 2026_05_26_* batch for OAuth (nullable password +
+                                 oauth_accounts table)
 database/seeders/                Admin, DataSource, TemplateCategories, AiFeatures,
                                  RolesAndPermissionsSeeder
 
 routes/
-├── api.php                     All API routes (auth, 2FA, email verify, password reset,
+├── api.php                     All API routes (auth, OAuth2, 2FA, email verify, password reset,
 │                               CRUD, generation, history, webhook). Permission middleware
 │                               applied per endpoint group.
-├── web.php                     Minimal (welcome page)
+├── web.php                     Filament OAuth redirect/callback routes (browser flow) +
+│                               welcome page
 └── console.php                 Artisan commands
 
 storage/app/

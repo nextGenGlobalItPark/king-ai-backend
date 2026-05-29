@@ -76,6 +76,11 @@ class AdminPanelProvider extends PanelProvider
                 PanelsRenderHook::AUTH_LOGIN_FORM_AFTER,
                 fn (): string => view('filament.partials.forgot-password-link')->render(),
             )
+            // Show Google / Apple OAuth buttons above the email/password form.
+            ->renderHook(
+                PanelsRenderHook::AUTH_LOGIN_FORM_BEFORE,
+                fn (): string => view('filament.partials.oauth-buttons')->render(),
+            )
             ->middleware([
                 EncryptCookies::class,
                 AddQueuedCookiesToResponse::class,

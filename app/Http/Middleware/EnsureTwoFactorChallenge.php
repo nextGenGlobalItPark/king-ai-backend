@@ -29,6 +29,13 @@ class EnsureTwoFactorChallenge
             return $next($request);
         }
 
+        // OAuth-authenticated sessions bypass this gate entirely. The OAuth
+        // provider already verified the user's identity; we don't re-challenge
+        // with 2FA for OAuth logins per product spec.
+        if ($request->session()->get('oauth_authenticated')) {
+            return $next($request);
+        }
+
         // Wait for prior gates: email verification and forced password
         // change. Only this middleware's predecessors should redirect
         // until those are done. Trying to redirect to /admin/two-factor-
@@ -51,6 +58,7 @@ class EnsureTwoFactorChallenge
 
         $allowedPathPatterns = [
             'admin/two-factor-challenge',
+            'admin/oauth',
             'admin/logout',
             'livewire/update',
             'livewire/upload-file',

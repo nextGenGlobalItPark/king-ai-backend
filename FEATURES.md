@@ -18,6 +18,7 @@ This document describes every feature in the system, how they fit together, and 
     - 2.4 [Forgot Password](#24-forgot-password)
     - 2.5 [Two-Factor Authentication](#25-two-factor-authentication)
     - 2.6 [Admin-Created Users & Temp Passwords](#26-admin-created-users--temp-passwords)
+    - 2.7 [OAuth2 — Google & Apple Sign-In](#27-oauth2--google--apple-sign-in)
 3. [Authorization — Roles & Permissions](#3-authorization--roles--permissions)
 4. [AI Generation Pipeline](#4-ai-generation-pipeline)
     - 4.1 [Vendor Abstraction](#41-vendor-abstraction)
@@ -242,6 +243,112 @@ EnsureTwoFactorChallenge  ──→  redirects to /admin/two-factor-challenge if
 ```
 
 `EnsureMustChangePassword` skips itself when email is unverified (so the email gate runs first). `EnsureTwoFactorChallenge` skips itself when either email is unverified OR `must_change_password` is true. This eliminates the redirect-loop class of bugs.
+
+### 2.7 OAuth2 — Google & Apple Sign-In
+
+Social sign-in via Google and Apple, brokered through **Supabase Auth**. The Laravel backend owns the entire OAuth flow — clients never handle tokens from Google/Apple directly.
+
+**Provider:** Supabase Auth (handles Google and Apple OAuth app credentials, consent screens, and token exchange on behalf of the backend).
+
+**Protocol:** OAuth2 with **PKCE** (Proof Key for Code Exchange). PKCE is used server-side, which prevents authorization code interception attacks even though there is no client secret in the browser/app.
+
+#### Flow
+
+```
+Mobile/Web client
+      │
+      │  Opens browser / WebView to:
+      │  GET /api/auth/oauth/{provider}
+      ▼
+  Laravel (OauthController)
+      │  Generates code_verifier + code_challenge (PKCE S256)
+      │  Stores verifier in Cache (10-min TTL, keyed by state UUID)
+      │  Redirects to Supabase /auth/v1/authorize
+      ▼
+  Supabase Auth → Google / Apple consent screen
+      │  User authenticates
+      │  Supabase redirects to:
+      │  GET /api/auth/oauth/{provider}/callback?code=xxx&_s={state}
+      ▼
+  Laravel (OauthController::callback)
+      │  Retrieves verifier from Cache using state UUID
+      │  POSTs code + verifier to Supabase /auth/v1/token?grant_type=pkce
+      │  Receives Supabase user object (id, email, name)
+      │  Finds or creates local User (see account resolution below)
+      │  Issues Sanctum token
+      ▼
+  Mobile deep link:
+  vidioking://auth/callback?token={sanctum_token}
+```
+
+On failure (user cancelled, expired state, Supabase error):
+```
+vidioking://auth/callback?error={message}
+```
+
+#### Account Resolution
+
+| Scenario | Result |
+|---|---|
+| First sign-in, no existing account | New User created with `role=user`, `email_verified_at=now()`, `must_change_password=false`, `password=null` |
+| First sign-in, existing account with same email | Existing account merged — `OauthAccount` row linked; email marked verified if not already |
+| Returning OAuth user (same provider + provider_id) | Existing linked account used directly |
+
+#### Behavioural Differences from Email/Password Login
+
+| Aspect | OAuth login | Email/password login |
+|---|---|---|
+| Email verification gate | Skipped — OAuth provider guarantees it | Required |
+| `must_change_password` gate | Skipped — always `false` for OAuth users | Applies if set |
+| 2FA challenge | **Skipped** — OAuth is treated as trusted auth | Applies if 2FA is enabled |
+| Sanctum token issuance | Direct — no intermediate challenge token | May require 2FA challenge first |
+
+#### Password-Sensitive Operations (2FA)
+
+OAuth-only users (i.e. `password IS NULL`) cannot call:
+- `DELETE /api/two-factor` (disable 2FA)
+- `POST /api/two-factor/recovery-codes` (regenerate recovery codes)
+
+Both return `403` with: `"This operation is not available for accounts signed in via Google or Apple."`
+
+An OAuth user who sets a password via the forgot-password flow is no longer OAuth-only and can use these operations normally.
+
+#### Database
+
+A new `oauth_accounts` table stores the link between a local User and their OAuth identity:
+
+| Column | Description |
+|---|---|
+| `user_id` | FK → users |
+| `provider` | `'google'` or `'apple'` |
+| `provider_id` | Supabase user UUID (stable across logins) |
+| `provider_email` | Email from the OAuth provider (informational) |
+
+One user can have multiple rows (one per provider). The `(provider, provider_id)` pair is unique across the system.
+
+#### Filament (Admin Panel)
+
+Admins can sign in to the Filament panel via Google or Apple. Two buttons are shown above the email/password form on the login page. After OAuth authentication:
+- The user's web session is established via `Auth::login()`
+- A session flag `oauth_authenticated = true` is set
+- All three auth-gate middlewares (`EnsureEmailVerified`, `EnsureMustChangePassword`, `EnsureTwoFactorChallenge`) detect this flag and short-circuit
+- Only users with `access-admin-panel` permission can complete the Filament OAuth flow; others are redirected to the login page with an error
+
+#### Configuration
+
+New `.env` variables required:
+
+```ini
+SUPABASE_URL=https://xyzxyz.supabase.co
+SUPABASE_ANON_KEY=eyJ...
+OAUTH_MOBILE_REDIRECT_SCHEME=vidioking     # deep link scheme
+OAUTH_WEB_REDIRECT_URL=                    # reserved for future web client
+```
+
+Supabase dashboard setup required:
+1. Enable Google and Apple providers in **Authentication → Providers**
+2. Add `{APP_URL}/api/auth/oauth/google/callback` and `{APP_URL}/api/auth/oauth/apple/callback` to **Authentication → URL Configuration → Redirect URLs**
+3. Add `{APP_URL}/admin/oauth/google/callback` and `{APP_URL}/admin/oauth/apple/callback` for the Filament flow
 
 ---
 
@@ -646,7 +753,7 @@ All emails use the standard Laravel markdown notification layout. Codes are disp
 - **Rate limiting:** `/api/generate/{feature}` is throttled to 10 req/min per user. Other endpoints use the default `throttle:api` rate.
 - **Verification code attempts:** capped at 5 per code; exceeded → code invalidated.
 - **Resend cooldown:** 60s between code re-issues per email address.
-- **2FA challenge token:** signed and time-limited (15 min) so an intercepted challenge token can't be replayed indefinitely.
+- **2FA challenge token:** cache-backed UUID with a **5-minute TTL** so an intercepted challenge token can't be replayed indefinitely.
 
 ### Anti-enumeration
 
@@ -707,8 +814,11 @@ The admin panel ID is `admin` (so the panel mounts at `/admin`). Don't change th
 | **Completion Mode** | Per-config setting: `polling` or `webhook`. Determines how the system learns about job completion. |
 | **Asset Download Job** | The queue job that copies vendor CDN assets to permanent local storage after generation completes. |
 | **Recovery Code** | One of 8 single-use 10-character codes generated when 2FA is enabled, used to log in if the authenticator app is lost. |
-| **Challenge Token** | Short-lived signed token issued during login when 2FA is required, exchanged for a Sanctum token after the user supplies a TOTP code. |
-| **Change Token** | Like challenge token but for the temp-password change flow. |
+| **Challenge Token** | Short-lived cache-backed UUID (5-minute TTL) issued during login when 2FA is required, exchanged for a Sanctum token after the user supplies a TOTP code. |
+| **Change Token** | Cache-backed UUID (same mechanism as challenge token) issued during login when `must_change_password` is true, consumed by `/auth/password/change-initial` which returns a Sanctum token directly. |
+| **OauthAccount** | A row in `oauth_accounts` linking a local User to an external OAuth identity (Google or Apple). One user can have one row per provider. |
+| **OAuth-only user** | A User whose `password` column is `null` — they can only authenticate via OAuth. Password-sensitive operations (2FA disable, recovery code regen) return 403 for these users. |
+| **PKCE** | Proof Key for Code Exchange — the OAuth2 extension used for the server-side OAuth flow. Prevents auth code interception by binding the authorization request to a one-time verifier. |
 | **Sanctum Token** | The opaque bearer token returned to authenticated API clients. Stored hashed in `personal_access_tokens`. |
 | **Filament User Contract** | Interface implemented by `User` that gates panel access via `canAccessPanel()`. |
 | **must_change_password** | User flag set true for admin-created users; cleared on first password change. Forces a redirect to `/admin/change-password` until cleared. |

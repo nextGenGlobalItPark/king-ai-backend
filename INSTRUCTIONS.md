@@ -11,6 +11,7 @@ This document is the working API reference and setup guide. For high-level desig
 - [Email Verification](#email-verification)
 - [Password Management](#password-management)
 - [Two-Factor Authentication](#two-factor-authentication)
+- [OAuth2 — Google & Apple Sign-In](#oauth2--google--apple-sign-in)
 - [User Management (admin-only)](#user-management-admin-only)
 - [Catalog Endpoints](#catalog-endpoints)
 - [AI Generation Endpoints](#ai-generation-endpoints)
@@ -64,7 +65,7 @@ king-ai-backend/
 
 ### Database Models
 
-`User`, `EmailVerificationCode`, `PasswordResetCode`, `Device`, `AiFeature`, `AiFeatureConfig`, `AiJob`, `Template`, `TemplateCategory`, `TemplateContent`, `TemplateCategoryDataSource`, `DataSource`, `VendorStatusMapping`, plus the `spatie/laravel-permission` models (`Role`, `Permission`).
+`User`, `EmailVerificationCode`, `PasswordResetCode`, `OauthAccount`, `Device`, `AiFeature`, `AiFeatureConfig`, `AiJob`, `Template`, `TemplateCategory`, `TemplateContent`, `TemplateCategoryDataSource`, `DataSource`, `VendorStatusMapping`, plus the `spatie/laravel-permission` models (`Role`, `Permission`).
 
 ---
 
@@ -81,6 +82,8 @@ The API uses Laravel Sanctum bearer tokens. Send `Authorization: Bearer {token}`
 | Must change password (admin-created user) | 200 with `change_token` + `requires_password_change: true` |
 | 2FA is enabled | 200 with `challenge_token` + `requires_two_factor: true` |
 | Otherwise | 200 with `token` (the Sanctum bearer) |
+
+`challenge_token` is a random UUID stored in Laravel Cache with a **5-minute TTL** (not a signed JWT). It is single-use — consuming it with a correct TOTP code pulls it from the cache and returns a Sanctum token. On a wrong code, a fresh `challenge_token` is returned in `errors.challenge_token` so the user does not need to re-enter their password.
 
 Always check for `requires_password_change` and `requires_two_factor` in your client's login handler.
 
@@ -137,10 +140,12 @@ On failure, `success` is `false`, `data` is null, and `errors` carries field-lev
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | `POST` | `/api/auth/password/forgot` | none | Issue a 6-digit reset code via email |
-| `POST` | `/api/auth/password/reset` | none | Submit `{email, code, password, password_confirmation}` to reset |
-| `POST` | `/api/auth/password/change-initial` | none (uses change_token) | For admin-created users on first login: submit `{change_token, password, password_confirmation}` to clear `must_change_password` |
+| `POST` | `/api/auth/password/reset` | none | Submit `{email, code, new_password, new_password_confirmation}` to reset |
+| `POST` | `/api/auth/password/change-initial` | none (uses change_token) | For admin-created users on first login: submit `{change_token, new_password, new_password_confirmation}` to clear `must_change_password`. **Issues a Sanctum token directly** — no need to call `/auth/login` afterward. |
 
 The reset endpoint also clears `must_change_password` if it was set. Neither endpoint issues a Sanctum token — the user must log in afterward.
+
+> **Note on `change-initial`:** unlike the reset flow, `/auth/password/change-initial` **does** issue a Sanctum token directly on success. The client receives `{token: "..."}` and is immediately authenticated without a separate `/auth/login` call.
 
 ---
 
@@ -158,6 +163,86 @@ Available to all authenticated users, both `admin` and `user` roles. Setup endpo
 | `POST` | `/api/two-factor/challenge` | none | Exchange `{challenge_token, code}` for a Sanctum token. `code` can be either a TOTP code or a recovery code. Tighter rate limit (10 req/min). |
 
 Recovery codes are single-use — consumed codes are removed from the user's encrypted blob.
+
+---
+
+## OAuth2 — Google & Apple Sign-In
+
+Social sign-in via Google and Apple, brokered through Supabase Auth. The backend owns the full PKCE flow — clients just open a browser/WebView to the redirect URL and receive a Sanctum token on the deep link.
+
+### Endpoints
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| `GET` | `/api/auth/oauth/{provider}` | none | Initiate OAuth flow — redirects browser to Supabase. `{provider}` is `google` or `apple`. |
+| `GET` | `/api/auth/oauth/{provider}/callback` | none | Supabase callback — exchanges code, issues Sanctum token, redirects to mobile deep link. |
+
+### Success redirect
+
+```
+vidioking://auth/callback?token={sanctum_token}
+```
+
+The mobile app intercepts this deep link, reads `token`, and stores it as the bearer token for all subsequent API calls.
+
+### Error redirect
+
+```
+vidioking://auth/callback?error={message}
+```
+
+Triggered when the user cancels, the OAuth state expires (10 min), or Supabase rejects the code exchange.
+
+### Account behaviour
+
+- **New user:** account auto-created with `role=user`, email verified, no password.
+- **Existing email match:** existing account merged — `oauth_accounts` row linked; email marked verified if not already.
+- **Returning user:** looked up via `oauth_accounts.provider_id` — no duplicate account created.
+- **2FA:** not challenged for OAuth logins.
+- **`must_change_password`:** always `false` for OAuth users; gate skipped.
+
+### 2FA restrictions for OAuth-only users
+
+Users with no password (OAuth-only) cannot call:
+
+| Endpoint | Response |
+|---|---|
+| `DELETE /api/two-factor` | `403` — "This operation is not available for accounts signed in via Google or Apple." |
+| `POST /api/two-factor/recovery-codes` | `403` — same message |
+
+### Example — mobile OAuth flow
+
+```
+1. App opens WebView to:
+   GET https://api.vidioking.com/api/auth/oauth/google
+
+2. Browser follows redirects through Supabase → Google consent screen
+
+3. After consent, Supabase redirects to your callback URL;
+   Laravel exchanges the code and redirects to:
+   vidioking://auth/callback?token=1|XyZ123abc...
+
+4. App intercepts the deep link, extracts the token, stores it,
+   and calls any authenticated endpoint normally:
+   Authorization: Bearer 1|XyZ123abc...
+```
+
+### Required Supabase dashboard setup
+
+1. Enable **Google** and **Apple** providers under Authentication → Providers
+2. Add these URLs to Authentication → URL Configuration → Redirect URLs:
+   - `{APP_URL}/api/auth/oauth/google/callback`
+   - `{APP_URL}/api/auth/oauth/apple/callback`
+   - `{APP_URL}/admin/oauth/google/callback`
+   - `{APP_URL}/admin/oauth/apple/callback`
+
+### Required `.env` variables
+
+```ini
+SUPABASE_URL=https://xyzxyz.supabase.co
+SUPABASE_ANON_KEY=eyJ...
+OAUTH_MOBILE_REDIRECT_SCHEME=vidioking
+```
 
 ---
 
@@ -258,7 +343,7 @@ Multipart form data with a `file` field. Used to upload reference images for ima
 
 ## Webhook (Vendor Callback)
 
-`POST /api/webhook/{configKey}/{jobUuid}` — unauthenticated. Vendors call this when generation completes (in callback completion mode). Security: UUID unpredictability + optional HMAC-SHA256 signature verification via the config's `webhook_secret`.
+`POST /api/webhook/{jobId}` — unauthenticated. Vendors call this when generation completes (in webhook completion mode). `{jobId}` is the internal `queue_job_id` UUID. Security: UUID unpredictability + optional HMAC-SHA256 signature verification via the config's `webhook_secret`.
 
 ---
 
@@ -345,7 +430,7 @@ HTTP/1.1 200 OK
 {
   "success": true,
   "data": {
-    "challenge_token": "eyJ...signed.jwt",
+    "challenge_token": "550e8400-e29b-41d4-a716-446655440000",
     "requires_two_factor": true
   },
   "message": "Two-factor authentication required."
@@ -355,7 +440,7 @@ HTTP/1.1 200 OK
 ```http
 POST /api/two-factor/challenge
 {
-  "challenge_token": "eyJ...signed.jwt",
+  "challenge_token": "550e8400-e29b-41d4-a716-446655440000",
   "code": "847291"
 }
 ```
@@ -385,7 +470,7 @@ HTTP/1.1 200 OK
 {
   "success": true,
   "data": {
-    "change_token": "eyJ...signed.jwt",
+    "change_token": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
     "requires_password_change": true
   },
   "message": "You must change your temporary password before continuing."
@@ -395,13 +480,24 @@ HTTP/1.1 200 OK
 ```http
 POST /api/auth/password/change-initial
 {
-  "change_token": "eyJ...signed.jwt",
-  "password": "myNewPassword",
-  "password_confirmation": "myNewPassword"
+  "change_token": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+  "new_password": "myNewPassword",
+  "new_password_confirmation": "myNewPassword"
 }
 ```
 
-After this, the user logs in normally (with their new password) to obtain a Sanctum token.
+```json
+HTTP/1.1 200 OK
+{
+  "success": true,
+  "data": {
+    "token": "1|XyZ123abc..."
+  },
+  "message": "Password updated. You are now logged in."
+}
+```
+
+`change-initial` issues a Sanctum token directly — the client is authenticated immediately and does not need a separate `/auth/login` call.
 
 ### 4. Set up 2FA
 
@@ -462,7 +558,8 @@ HTTP/1.1 200 OK
 {
   "success": true,
   "data": {
-    "job_id": "550e8400-e29b-41d4-a716-446655440000"
+    "job_id": "550e8400-e29b-41d4-a716-446655440000",
+    "vendor": 1
   },
   "message": "Generation queued."
 }
@@ -580,6 +677,12 @@ SANCTUM_STATEFUL_DOMAINS=localhost
 FIREBASE_CREDENTIALS=/path/to/storage/app/vidio-king-ai-firebase.json
 FIREBASE_PROJECT_ID=
 
+# Supabase (OAuth2 — Google & Apple sign-in)
+SUPABASE_URL=https://xyzxyz.supabase.co
+SUPABASE_ANON_KEY=eyJ...
+OAUTH_MOBILE_REDIRECT_SCHEME=vidioking     # mobile deep link scheme
+OAUTH_WEB_REDIRECT_URL=                    # reserved, not yet used
+
 # Vendor credentials (mapped through config/vendor-credentials.php)
 KLING_ACCESS_KEY=
 KLING_SECRET_KEY=
@@ -619,6 +722,7 @@ Email setup gotchas:
    php artisan migrate
    php artisan db:seed --class=RolesAndPermissionsSeeder
    ```
+   > The `2026_05_26_*` migrations make `users.password` nullable and create the `oauth_accounts` table. Both are required for OAuth to work.
 
 5. **Storage symlink**
    ```bash

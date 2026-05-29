@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\OauthController;
 use App\Http\Controllers\AiController;
 use App\Http\Controllers\AiFeatureConfigController;
 use App\Http\Controllers\AiFeatureController;
@@ -35,6 +36,30 @@ Route::post('/webhook/{jobId}', [WebhookController::class, 'handle'])
 Route::prefix('auth')->group(function () {
     Route::post('/register', [AuthController::class, 'register']);
     Route::post('/login', [AuthController::class, 'login']);
+
+    /*
+    |--------------------------------------------------------------------------
+    | OAuth2 — Google / Apple via Supabase PKCE
+    |--------------------------------------------------------------------------
+    |
+    | /oauth/{provider}           — initiates the OAuth flow; redirects to
+    |                               Supabase which handles Google/Apple.
+    | /oauth/{provider}/callback  — receives the auth code from Supabase,
+    |                               exchanges it, issues a Sanctum token, and
+    |                               redirects to the mobile deep link:
+    |                               vidioking://auth/callback?token={token}
+    |
+    | Both routes are unauthenticated — the browser (or in-app WebView)
+    | follows the redirect chain and the token comes back on the deep link.
+    | 2FA is NOT challenged for OAuth sign-ins per product spec.
+    |
+    */
+    Route::prefix('oauth')->group(function () {
+        Route::get('/{provider}', [OauthController::class, 'redirect'])
+            ->name('oauth.redirect');
+        Route::get('/{provider}/callback', [OauthController::class, 'callback'])
+            ->name('oauth.callback');
+    });
 
     /*
     |--------------------------------------------------------------------------

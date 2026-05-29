@@ -149,6 +149,10 @@ class TwoFactorController extends Controller
      */
     public function regenerateRecoveryCodes(Request $request): JsonResponse
     {
+        if ($request->user()->isOauthOnly()) {
+            return $this->oauthOperationDenied();
+        }
+
         $this->confirmPassword($request);
 
         try {
@@ -169,6 +173,10 @@ class TwoFactorController extends Controller
      */
     public function disable(Request $request): JsonResponse
     {
+        if ($request->user()->isOauthOnly()) {
+            return $this->oauthOperationDenied();
+        }
+
         $this->confirmPassword($request);
 
         try {
@@ -218,5 +226,18 @@ class TwoFactorController extends Controller
                 'password' => ['The provided password is incorrect.'],
             ]);
         }
+    }
+
+    /**
+     * Uniform 403 response for OAuth-only users attempting password-gated
+     * operations. OAuth users have no password to confirm with.
+     */
+    private function oauthOperationDenied(): JsonResponse
+    {
+        return $this->error(
+            errors: null,
+            message: 'This operation is not available for accounts signed in via Google or Apple.',
+            status: Response::HTTP_FORBIDDEN
+        );
     }
 }
