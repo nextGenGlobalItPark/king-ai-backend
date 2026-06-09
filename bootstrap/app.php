@@ -26,14 +26,17 @@ return Application::configure(basePath: dirname(__DIR__))
             'throttle:api',
         ]);
         $middleware->alias([
-            'auth:sanctum' => EnsureFrontendRequestsAreStateful::class,
-            'throttle' => ThrottleRequests::class,
+            'auth:sanctum'  => EnsureFrontendRequestsAreStateful::class,
+            'throttle'      => ThrottleRequests::class,
             // Spatie roles/permissions middleware. Usage in routes:
             //   ->middleware('role:admin')
             //   ->middleware('permission:manage-templates')
             //   ->middleware('permission:manage-templates|manage-categories')   // OR
-            'role' => RoleMiddleware::class,
-            'permission' => PermissionMiddleware::class,
+            'role'          => RoleMiddleware::class,
+            'permission'    => PermissionMiddleware::class,
+            // Supabase JWT token verification for API routes.
+            // Usage: ->middleware('supabase.auth')
+            'supabase.auth' => \App\Http\Middleware\VerifySupabaseToken::class,
         ]);
     })
     ->withSchedule(function (Schedule $schedule) {
@@ -53,9 +56,9 @@ return Application::configure(basePath: dirname(__DIR__))
             if ($request->expectsJson() || $request->is('api/*')) {
                 return response()->json([
                     'success' => false,
-                    'data' => null,
+                    'data'    => null,
                     'message' => 'You do not have permission to perform this action.',
-                    'errors' => null,
+                    'errors'  => null,
                 ], 403);
             }
             return null; // fall through to default rendering for non-JSON
