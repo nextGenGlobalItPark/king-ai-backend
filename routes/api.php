@@ -291,3 +291,16 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/{vendorStatusMapping}', [VendorStatusMappingController::class, 'destroy']);
     });
 });
+// Public routes — no auth needed
+Route::post('/auth/login', [AuthController::class, 'login']);
+Route::post('/auth/register', [AuthController::class, 'register']);
+
+// Protected routes — Supabase token required
+Route::middleware('supabase.auth')->group(function () {
+    Route::get('/me', function (\Illuminate\Http\Request $request) {
+        return response()->json([
+            'success' => true,
+            'data'    => $request->user(),
+        ]);
+    });
+});

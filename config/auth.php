@@ -111,5 +111,6 @@ return [
     */
 
     'password_timeout' => env('AUTH_PASSWORD_TIMEOUT', 10800),
+'oauth_required_role' => env('OAUTH_REQUIRED_ROLE', 'admin'),
 
 ];
