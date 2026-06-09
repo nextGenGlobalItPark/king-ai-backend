@@ -9,18 +9,32 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
 
-class SupabaseGoogleController extends Controller
+class OAuthController extends Controller
 {
     public function __construct(private SupabaseAuthService $supabase) {}
 
-    public function redirect()
+    /**
+     * Redirect the user to the OAuth provider (google, github, etc.).
+     * Route: GET /admin/auth/{provider}/redirect
+     */
+    public function redirect(string $provider)
     {
+        $supported = ['google', 'github', 'facebook'];
+
+        if (!in_array($provider, $supported)) {
+            return redirect('/admin/login')
+                ->withErrors(['email' => "OAuth provider [{$provider}] is not supported."]);
+        }
+
         $pkce = $this->supabase->generatePkce();
 
-        session(['pkce_code_verifier' => $pkce['verifier']]);
+        session([
+            'pkce_code_verifier' => $pkce['verifier'],
+            'oauth_provider'     => $provider,
+        ]);
 
         $url = $this->supabase->getOAuthUrl(
-            provider:      'google',
+            provider:      $provider,
             redirectUrl:   config('services.supabase.redirect_url'),
             codeChallenge: $pkce['challenge'],
         );
@@ -28,11 +42,15 @@ class SupabaseGoogleController extends Controller
         return redirect($url);
     }
 
+    /**
+     * Handle the callback from any OAuth provider.
+     * Route: GET /admin/auth/callback
+     */
     public function callback(Request $request)
     {
         if ($request->query('error')) {
             return redirect('/admin/login')
-                ->withErrors(['email' => 'Google login was cancelled or failed.']);
+                ->withErrors(['email' => 'OAuth login was cancelled or failed.']);
         }
 
         $code         = $request->query('code');
@@ -48,10 +66,10 @@ class SupabaseGoogleController extends Controller
 
         if (!$tokenData || empty($tokenData['access_token'])) {
             return redirect('/admin/login')
-                ->withErrors(['email' => 'Google authentication failed. Please try again.']);
+                ->withErrors(['email' => 'Authentication failed. Please try again.']);
         }
 
-        // Fetch user profile
+        // Fetch user profile from Supabase
         $supabaseUser = $this->supabase->getUser($tokenData['access_token']);
 
         if (!$supabaseUser || empty($supabaseUser['email'])) {
@@ -59,7 +77,8 @@ class SupabaseGoogleController extends Controller
                 ->withErrors(['email' => 'Could not retrieve user information.']);
         }
 
-        session()->forget('pkce_code_verifier');
+        // Clear PKCE session data — single use only
+        session()->forget(['pkce_code_verifier', 'oauth_provider']);
 
         // Persist user in our DB
         $user = User::updateOrCreate(
@@ -73,18 +92,18 @@ class SupabaseGoogleController extends Controller
             ]
         );
 
-        // Always ensure Google users are email-verified
+        // Always ensure OAuth users are email-verified
         if (!$user->email_verified_at) {
             $user->email_verified_at = now();
             $user->save();
         }
 
-        if (!$user->hasRole('admin')) {
+        // Only allow users who have been granted the admin role
+        if (!$user->hasRole(config('auth.oauth_required_role', 'admin'))) {
             return redirect('/admin/login')
                 ->withErrors(['email' => 'Your account does not have admin access.']);
         }
 
-        // Start Laravel session for the user
         Auth::login($user, remember: true);
 
         return redirect()->intended('/admin');
