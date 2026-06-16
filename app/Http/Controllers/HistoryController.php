@@ -29,6 +29,23 @@ class HistoryController extends Controller
     {
         try {
             $query = AiJob::with(['template.templateContents'])
+                // List view never uses the `input` JSON column (only the
+                // detailed show() does). Excluding it keeps rows narrow and
+                // avoids dragging large payloads through sorting/pagination.
+                // `template_id` is required for the template eager-load.
+                ->select([
+                    'id',
+                    'queue_job_id',
+                    'feature',
+                    'status',
+                    'progress',
+                    'credit_cost',
+                    'template_id',
+                    'result',
+                    'user_id',
+                    'created_at',
+                    'updated_at',
+                ])
                 ->where('user_id', auth()->id())
                 ->whereNull('hidden_at')
                 ->orderBy('created_at', 'desc');
